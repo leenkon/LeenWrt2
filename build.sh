@@ -69,17 +69,20 @@ read -p "Root密码 [默认: password]: " rp
 ROOT_PWD="${rp:-$ROOT_PASSWORD}"
 success "密码已设置"
 
-# AdGuardHome + OpenClash（可选：勾选才首启安装并布 DNS 链）
-read -p "安装 AdGuardHome + OpenClash? [Y/n]: " oa
-case "$oa" in [Nn]*) WITH_OC_ADGH=0;; *) WITH_OC_ADGH=1;; esac
-[ "$WITH_OC_ADGH" = "1" ] && success "将安装 OC/ADGH 并布 DNS 链" || success "不安装 OC/ADGH（DNS 保持默认）"
+# AdGuardHome / OpenClash（可独立勾选：勾选才首启安装并布 DNS 链）
+read -p "安装 AdGuardHome? [Y/n]: " a
+case "$a" in [Nn]*) WITH_ADGH=0;; *) WITH_ADGH=1;; esac
+read -p "安装 OpenClash? [Y/n]: " o
+case "$o" in [Nn]*) WITH_OC=0;; *) WITH_OC=1;; esac
+[ "$WITH_ADGH" = "1" ] && success "将安装 AdGuardHome" || success "不安装 AdGuardHome"
+[ "$WITH_OC" = "1" ] && success "将安装 OpenClash" || success "不安装 OpenClash"
 
 # 确认
 echo -e "\n========================================  准备编译  ========================================"
 echo "  核心: $CORE | 版本: $VERSION | 配置: $PROFILE | IP: $ROUTER_IP | 类型: $RUN_TYPE"
 [[ -n "$GATEWAY_IP" ]] && echo "  网关: $GATEWAY_IP"
 [[ -n "$PPPOE_USER" ]] && echo "  PPPoE: $PPPOE_USER"
-echo "  OC/ADGH: $([ "$WITH_OC_ADGH" = 1 ] && echo 安装 || echo 不安装)"
+echo "  ADGH/OC: ADGH=$([ "$WITH_ADGH" = 1 ] && echo 安装 || echo 不安装) / OC=$([ "$WITH_OC" = 1 ] && echo 安装 || echo 不安装)"
 echo "==================================================================================="
 read -p "确认开始? [Y/n]: " c; [[ "$c" =~ ^[Nn]$ ]] && exit 0
 
@@ -165,9 +168,12 @@ cp -f "$SCRIPT_DIR/apps/"*.apk "$OPENWRT_DIR/files/etc/firstboot-pkgs/apps/" 2>/
 mkdir -p "$OPENWRT_DIR/files/etc/firstboot-pkgs/lists"
 cp -f "$SCRIPT_DIR/lists/common.txt" "$OPENWRT_DIR/files/etc/firstboot-pkgs/lists/" 2>/dev/null || true
 cp -f "$SCRIPT_DIR/lists/default.txt" "$OPENWRT_DIR/files/etc/firstboot-pkgs/lists/" 2>/dev/null || true
-# OC/ADGH 仅在勾选时拷入首启安装目录（firstboot-pkgs 据此门控 DNS 布链）
-if [ "$WITH_OC_ADGH" = "1" ]; then
-  cp -f "$SCRIPT_DIR/lists/oc-adgh.txt" "$OPENWRT_DIR/files/etc/firstboot-pkgs/lists/" 2>/dev/null || true
+# ADGH/OC 分别仅在勾选时拷入首启安装目录（firstboot-pkgs 据列表存在与否门控 DNS 布链）
+if [ "$WITH_ADGH" = "1" ]; then
+  cp -f "$SCRIPT_DIR/lists/adguardhome.txt" "$OPENWRT_DIR/files/etc/firstboot-pkgs/lists/" 2>/dev/null || true
+fi
+if [ "$WITH_OC" = "1" ]; then
+  cp -f "$SCRIPT_DIR/lists/openclash.txt" "$OPENWRT_DIR/files/etc/firstboot-pkgs/lists/" 2>/dev/null || true
 fi
 
 # 确保脚本可执行（Windows 无 Unix x 位，按路径/扩展名匹配）

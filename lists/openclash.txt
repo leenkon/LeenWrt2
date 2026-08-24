@@ -1,0 +1,7 @@
+# OpenClash（可选：build.sh WITH_OC / workflow openclash=true 才首启安装并布 DNS 链）
+# 依赖 ruby + ruby-yaml（LuCI YAML 解析，不可选）；sniffer 由 custom_overwrite 开启
+# 仅 OC 时：dnsmasq :53 -> OpenClash :7874；与 ADGH 共存时：ADGH :53 -> OC :7874
+luci-app-openclash
+openclash
+ruby
+ruby-yaml

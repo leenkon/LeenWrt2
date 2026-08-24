@@ -6,7 +6,8 @@ on:
     inputs:
       version: {description: '版本 (fanchmwrt 分支: 25.12.4 / 25.12.2)', required: true, type: string, default: '25.12.4'}
       profile: {description: '配置 (Main=主路由 / Mini=旁路由)', required: true, type: choice, options: [Main, Mini], default: 'Main'}
-      oc_adgh: {description: '安装 AdGuardHome + OpenClash 并布 DNS 链', required: false, type: boolean, default: true}
+      adguardhome: {description: '安装 AdGuardHome 并布 DNS 链', required: false, type: boolean, default: true}
+      openclash: {description: '安装 OpenClash 并布 DNS 链', required: false, type: boolean, default: true}
       custom_ip: {description: '自定义IP', type: string, default: ''}
       custom_gateway: {description: '网关(旁路由)', type: string, default: ''}
       pppoe_username: {description: 'PPPoE账号(主路由)', type: string, default: ''}
@@ -100,11 +101,14 @@ jobs:
           mkdir -p files/etc/firstboot-pkgs/apps
           cp -f $GITHUB_WORKSPACE/apps/*.apk files/etc/firstboot-pkgs/apps/ 2>/dev/null || true
           mkdir -p files/etc/firstboot-pkgs/lists
-          # common/default 始终拷；oc-adgh 仅当 oc_adgh=true 才拷（firstboot-pkgs 据此门控 DNS 布链）
+          # common/default 始终拷；adguardhome/openclash 分别仅当对应输入=true 才拷（firstboot-pkgs 据列表存在与否门控 DNS 布链）
           cp -f $GITHUB_WORKSPACE/lists/common.txt files/etc/firstboot-pkgs/lists/ 2>/dev/null || true
           cp -f $GITHUB_WORKSPACE/lists/default.txt files/etc/firstboot-pkgs/lists/ 2>/dev/null || true
-          if [ "${{ github.event.inputs.oc_adgh }}" = "true" ]; then
-            cp -f $GITHUB_WORKSPACE/lists/oc-adgh.txt files/etc/firstboot-pkgs/lists/ 2>/dev/null || true
+          if [ "${{ github.event.inputs.adguardhome }}" = "true" ]; then
+            cp -f $GITHUB_WORKSPACE/lists/adguardhome.txt files/etc/firstboot-pkgs/lists/ 2>/dev/null || true
+          fi
+          if [ "${{ github.event.inputs.openclash }}" = "true" ]; then
+            cp -f $GITHUB_WORKSPACE/lists/openclash.txt files/etc/firstboot-pkgs/lists/ 2>/dev/null || true
           fi
           find files/ -type f \( -path "*/sbin/*" -o -path "*/init.d/*" -o -path "*/hotplug.d/*" -o -path "*/uci-defaults/*" -o -name "*.sh" \) -exec chmod 755 {} + 2>/dev/null || true
           make defconfig && make download && make clean

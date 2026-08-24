@@ -4,7 +4,7 @@
 #   1) 离线安装 /etc/firstboot-pkgs/apps/*.apk（自编译或本地上传的预编译包，允许未签名；
 #      来源需与目标内核 vermagic 匹配，否则 kmod 无法加载）
 #   2) 在线安装 lists/ 中的官方源包：common.txt 始终安装；非 Mini 档额外安装 default.txt
-#   3) OC/ADGH 首启布链（apply_oc_adgh）：安装后写回自定义文件并应用 DNS 过滤链（main 含 dns-hijack）
+#   3) OC/ADGH 首启布链（apply_dns_chain）：安装后写回自定义文件并应用 DNS 过滤链（可独立勾选；main 含 dns-hijack）
 # 完成后自禁用并清理本服务，避免每次启动重复安装。
 START=99
 STOP=10
@@ -47,7 +47,7 @@ install_all() {
         [ "$prof" != "mini" ] && install_list /etc/firstboot-pkgs/lists/default.txt
         # OC/ADGH 首启布链：必须在在线安装成功（包已装上）之后执行；
         # 放此分支内，确保 apk update 失败时绝不布链（避免无 ADGH 时 dns-hijack 致 DNS 全断）
-        apply_oc_adgh "$prof"
+        apply_dns_chain "$prof"
     fi
 
     # 安装完成后刷新 Web 后台，加载新装的 luci-app-* 模块（uhttpd 需 restart 才能识别）
@@ -61,19 +61,35 @@ install_all() {
 }
 
 # 首启安装 OC/ADGH 后应用 DNS 过滤链（解决首启时序：uci schema 需包已装）
-apply_oc_adgh() {
+# 二者可独立勾选，组合出四种拓扑：
+#   neither : dnsmasq :53 默认（直连 223.5.5.5/223.6.6.6），不劫持
+#   ADGH    : dnsmasq :5453 -> ADGH :53（ADGH 上游自带 OC:7874 兜底 dnsmasq:5453，无 OC 时自动跳过）
+#   OC      : dnsmasq :53 -> OC :7874（OC redir-host，dnsmasq 上游指向 OC）
+#   both    : dnsmasq :5453 -> ADGH :53 -> OC :7874
+# 门控：勾选的列表才会被拷入镜像首启目录，据此判断装了哪些
+apply_dns_chain() {
     local prof="$1"
-    # 勾选门控：未勾选时 oc-adgh.txt 不会被拷入镜像，直接跳过（DNS 保持默认，不被劫持）
-    [ -f /etc/firstboot-pkgs/lists/oc-adgh.txt ] || return 0
+    local have_adgh=0 have_oc=0
+
+    # 勾选门控：对应列表未被拷入镜像即视为未勾选（保持默认 DNS）
+    [ -f /etc/firstboot-pkgs/lists/adguardhome.txt ] && have_adgh=1
+    [ -f /etc/firstboot-pkgs/lists/openclash.txt ]  && have_oc=1
+    [ "$have_adgh" = "0" ] && [ "$have_oc" = "0" ] && {
+        logger -t firstboot-pkgs "未勾选 ADGH/OC，DNS 保持默认（dnsmasq :53）"
+        return 0
+    }
 
     # apk add 可能覆盖 vendored 的 /etc 文件，故安装后再把 staging 写回真实路径
-    if [ -d /etc/firstboot-pkgs/adgh ]; then
+    [ "$have_adgh" = "1" ] && [ -d /etc/firstboot-pkgs/adgh ] && {
         cp -rf /etc/firstboot-pkgs/adgh/etc/* /etc/ 2>/dev/null
         cp -rf /etc/firstboot-pkgs/adgh/usr/* /usr/ 2>/dev/null
-    fi
+    }
+    [ "$have_oc" = "1" ] && [ -d /etc/firstboot-pkgs/openclash ] && {
+        cp -rf /etc/firstboot-pkgs/openclash/etc/* /etc/ 2>/dev/null
+    }
 
     # OpenClash uci（Meta / redir-host；sniffer 由 custom_overwrite 开启）
-    if [ -x /etc/init.d/openclash ] || command -v openclash >/dev/null 2>&1; then
+    if [ "$have_oc" = "1" ] && { [ -x /etc/init.d/openclash ] || command -v openclash >/dev/null 2>&1; }; then
         uci -q get openclash.config.core_type >/dev/null || uci set openclash.config=openclash
         uci set openclash.config.core_type='Meta'
         uci set openclash.config.core_version='linux-amd64'
@@ -87,7 +103,7 @@ apply_oc_adgh() {
     fi
 
     # AdGuardHome 启用 + 启动（自定义 init.d 以 root 运行绑定 :53）
-    if [ -x /etc/init.d/adguardhome ]; then
+    if [ "$have_adgh" = "1" ] && [ -x /etc/init.d/adguardhome ]; then
         uci set adguardhome.config.enabled='1' 2>/dev/null
         /etc/init.d/adguardhome enable 2>/dev/null
         /etc/init.d/adguardhome start 2>/dev/null
@@ -97,9 +113,8 @@ apply_oc_adgh() {
     # DNS 拓扑：仅当 AdGuardHome 真实装上（/usr/bin/AdGuardHome 存在）才布链；
     # 否则保持 dnsmasq :53 默认，避免劫持 DNS 致断网
     if [ -x /usr/bin/AdGuardHome ]; then
-        # dnsmasq 让出 :53 给 ADGH；OC 监听 :7874 为 ADGH 主上游
         if [ "$prof" = "mini" ]; then
-            # 旁路由：dnsmasq :5453（DHCP ignore 由 99-custom 设置），ADGH :53，OC :7874；无 dns-hijack
+            # 旁路由：dnsmasq :5453（DHCP ignore 由 99-custom 设置），ADGH :53；无 dns-hijack
             uci -q set dhcp.@dnsmasq[0].port='5453'
             uci -q set dhcp.@dnsmasq[0].rebind_protection='0'
             uci -q set dhcp.@dnsmasq[0].dns_redirect='0'
@@ -108,9 +123,9 @@ apply_oc_adgh() {
             uci add_list dhcp.@dnsmasq[0].server='223.6.6.6'
             uci set dhcp.@dnsmasq[0].noresolv='1'
             uci commit dhcp
-            logger -t firstboot-pkgs "旁路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53 -> OC :7874（无 dns-hijack）"
+            logger -t firstboot-pkgs "旁路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53$([ "$have_oc" = 1 ] && echo ' -> OC :7874')（无 dns-hijack）"
         else
-            # 主路由：dnsmasq :5453，ADGH :53，OC :7874，dns-hijack 劫持 LAN :53 -> ADGH
+            # 主路由：dnsmasq :5453，ADGH :53，dns-hijack 劫持 LAN :53 -> ADGH
             uci -q set dhcp.@dnsmasq[0].port='5453'
             uci -q delete dhcp.@dnsmasq[0].server
             uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
@@ -126,9 +141,17 @@ apply_oc_adgh() {
                 uci set firewall.dns_hijack_include.path='/usr/sbin/dns-hijack'
                 uci set firewall.dns_hijack_include.enabled='1'
                 uci commit firewall
-                logger -t firstboot-pkgs "主路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53 -> OC :7874 + dns-hijack"
+                logger -t firstboot-pkgs "主路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53$([ "$have_oc" = 1 ] && echo ' -> OC :7874') + dns-hijack"
             fi
         fi
+    elif [ "$have_oc" = "1" ]; then
+        # 仅 OC（无 ADGH）：dnsmasq :53 不动，上游指向 OC :7874（redir-host 经 OC 解析）
+        uci -q delete dhcp.@dnsmasq[0].server
+        uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#7874'
+        uci set dhcp.@dnsmasq[0].noresolv='1'
+        uci set dhcp.@dnsmasq[0].dns_redirect='0'
+        uci commit dhcp
+        logger -t firstboot-pkgs "DNS 拓扑: 仅 OpenClash -> dnsmasq :53 -> OC :7874（无 ADGH/dns-hijack）"
     else
         logger -t firstboot-pkgs "AdGuardHome 未安装，跳过 DNS 拓扑布链（保持 dnsmasq :53 默认）"
     fi
