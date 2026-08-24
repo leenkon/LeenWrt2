@@ -23,9 +23,8 @@ SUBNET_MASK="255.255.255.0"
 DNS_MAIN="223.5.5.5"
 DNS_BACKUP="223.6.6.6"
 
-VERSION="" PHASE="" PROFILE_TYPE="" FEEDS_SRC="" FILES_DIR_NAME="files"
-NO_ADGH=0 WITH_OC=0
-CUSTOM_IP="" CUSTOM_GATEWAY="" PPPOE_USERNAME="" PPPOE_PASSWORD="" ROOT_PASSWORD="" LOG_SERVER=""
+VERSION="" PHASE="" PROFILE_TYPE="" CORE="fanchmwrt" FEEDS_SRC="" FILES_DIR_NAME="files"
+CUSTOM_IP="" CUSTOM_GATEWAY="" BYPASS_IP="" PPPOE_USERNAME="" PPPOE_PASSWORD="" ROOT_PASSWORD=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -37,9 +36,7 @@ while [ $# -gt 0 ]; do
         --pppoe-user) PPPOE_USERNAME="$2"; shift 2 ;;
         --pppoe-pass) PPPOE_PASSWORD="$2"; shift 2 ;;
         --root-pass)  ROOT_PASSWORD="$2"; shift 2 ;;
-        --no-adgh)   NO_ADGH=1; shift ;;
-        --with-oc)   WITH_OC=1; shift ;;
-        --log-server) LOG_SERVER="$2"; shift 2 ;;
+        --core)      CORE="$2"; shift 2 ;;
         --feeds)     FEEDS_SRC="$2"; shift 2 ;;
         --files-dir) FILES_DIR_NAME="$2"; shift 2 ;;
         *) error_exit "未知参数 $1" ;;
@@ -47,16 +44,16 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$VERSION" ] && [ -n "$PHASE" ] || error_exit "必填 --version / --phase"
-[ "$PHASE" = "after" ] && [ -z "$PROFILE_TYPE" ] && error_exit "after阶段必须指定 --type full/bypass"
-case "$PROFILE_TYPE" in ""|bypass|full) ;; *) error_exit "--type 仅支持 bypass / full" ;; esac
+[ "$PHASE" = "after" ] && [ -z "$PROFILE_TYPE" ] && error_exit "after阶段必须指定 --type main/bypass"
+case "$PROFILE_TYPE" in ""|main|bypass) ;; *) error_exit "--type 仅支持 main / bypass" ;; esac
 
 if [ "$PROFILE_TYPE" = "bypass" ]; then
     [ -z "$CUSTOM_IP" ] && CUSTOM_IP="$DEF_BYPASS_IP"
     [ -z "$CUSTOM_GATEWAY" ] && CUSTOM_GATEWAY="$DEF_MAIN_IP"
     is_valid_ipv4 "$CUSTOM_IP" || error_exit "非法旁路由IP: $CUSTOM_IP"
     is_valid_ipv4 "$CUSTOM_GATEWAY" || error_exit "非法旁路由网关: $CUSTOM_GATEWAY"
-    [ -n "$PPPOE_USERNAME" ] || [ -n "$PPPOE_PASSWORD" ] && error_exit "旁路由不支持PPPoE，请使用 --type full"
-elif [ "$PROFILE_TYPE" = "full" ]; then
+    [ -n "$PPPOE_USERNAME" ] || [ -n "$PPPOE_PASSWORD" ] && error_exit "旁路由不支持PPPoE，请使用 --type main"
+elif [ "$PROFILE_TYPE" = "main" ]; then
     [ -z "$CUSTOM_IP" ] && CUSTOM_IP="$DEF_MAIN_IP"
     is_valid_ipv4 "$CUSTOM_IP" || error_exit "非法路由IP: $CUSTOM_IP"
 fi
@@ -71,7 +68,7 @@ PROJECT_ROOT=$(cd "$SCRIPT_DIR/.." && pwd -P)
 
 case "$PHASE" in
 before)
-    echo "[diy] before: $VERSION"
+    echo "[diy] before: $VERSION (core=$CORE)"
     if [ -n "$FEEDS_SRC" ]; then
         FEED_CONF_SRC="$FEEDS_SRC"
     else
@@ -81,24 +78,9 @@ before)
     rm -f feeds.conf
     cp "$FEED_CONF_SRC" feeds.conf
     ;;
-ruby)
-    # ruby YJIT 解耦：分支头 lang/ruby 默认 RUBY_ENABLE_YJIT=y -> 拉 rust/host -> rustc LLVM 404 构建挂。
-    # OpenClash 依赖 ruby(不可选)，故仅在 WITH_OC 时由 build.sh/workflow 调用。须 feeds update 后、install 前执行。
-    echo "[diy] ruby: 解耦 YJIT 与 rust/host（x86_64/aarch64）"
-    RUBY_DIR="$PROJECT_ROOT/openwrt/feeds/packages/lang/ruby"
-    if [ -d "$RUBY_DIR" ]; then
-        # Makefile: 去掉 RUBY_ENABLE_YJIT:rust/host 条件依赖，仅保留 ruby/host（用 # 作分隔符避路径斜杠）
-        sed -i -E 's#(PKG_BUILD_DEPENDS:=ruby/host) RUBY_ENABLE_YJIT:rust/host#\1#' "$RUBY_DIR/Makefile"
-        # Config.in: 删除 x86_64/aarch64 默认开启 YJIT（让 defconfig 不再翻成 =y）
-        sed -i -E '/^[[:space:]]*default y if x86_64\|\|aarch64[[:space:]]*$/d' "$RUBY_DIR/Makefile"
-        echo "[diy] ruby: 已解耦 YJIT（Makefile 依赖 + Config.in default 均清除）"
-    else
-        echo "[diy] WARN: 未找到 $RUBY_DIR（feeds update 是否已执行？），跳过 ruby YJIT 解耦" >&2
-    fi
-    ;;
 
 after)
-    echo "[diy] after: $PROFILE_TYPE"
+    echo "[diy] after: $PROFILE_TYPE (core=$CORE)"
     case "$FILES_DIR_NAME" in
       /*) FB_DIR="$FILES_DIR_NAME" ;;
       *)  FB_DIR="$PROJECT_ROOT/$FILES_DIR_NAME" ;;
@@ -109,143 +91,31 @@ after)
     rm -f "$OUT" "$SHADOW"
 
     ip_esc=$(_escape_uci "$CUSTOM_IP")
-    log_server_esc=$(_escape_uci "$LOG_SERVER")
 
-    # ===== 公共配置块（各 profile 按需引用） =====
-    # IP 转发开关：所有 profile 统一开启
-    IP_FORWARD_LN='grep -q '\''net.ipv4.ip_forward=1'\'' /etc/sysctl.conf || echo '\''net.ipv4.ip_forward=1'\'' >> /etc/sysctl.conf'
-
-    # full 共用：LAN 静态地址（lan6 删除、ip6assign、proto、ipaddr、netmask）
-    LAN_WAN_COMMON_BLK=$(cat <<EOF
-uci -q delete network.lan6
-uci set network.lan.ip6assign='64'
-uci set network.lan.proto='static'
-uci set network.lan.ipaddr='$ip_esc'
-uci set network.lan.netmask='$SUBNET_MASK'
-uci commit network
-EOF
-)
-
-    # bypass/full 共用：OpenClash meta/redir-host 配置
-    OC_CONFIG_BLK=$(cat <<'EOF'
-uci -q get openclash.config.core_type >/dev/null || uci set openclash.config=openclash
-uci set openclash.config.core_type='Meta'
-uci set openclash.config.core_version='linux-amd64'
-uci set openclash.config.enable_redirect_dns='0'
-uci set openclash.config.en_mode='redir-host'
-uci set openclash.config.operation_mode='redir-host'
-uci set openclash.config.enable_custom_overwrite='1'
-uci commit openclash
-EOF
-)
-
-    # 带 ADGH 时启用二进制 AdGuardHome（init.d 经 files/ 注入；Procd 脚本需 enable 才开机自启）
-    ADGH_ENABLE_BLK=$(cat <<'EOF'
-chmod 755 /etc/init.d/adguardhome
-/etc/init.d/adguardhome enable
-/etc/init.d/adguardhome start
-EOF
-)
-
-    # full 共用：LAN 区 forward + lan->wan forwarding 重置
-    LAN_FORWARD_BLK=$(cat <<'EOF'
-LAN_FW=$(uci show firewall | grep "\.name='lan'" | cut -d. -f1-2)
-[ -n "$LAN_FW" ] && uci set ${LAN_FW}.forward='ACCEPT'
-WAN_FW=$(uci show firewall | grep "\.name='wan'" | cut -d. -f1-2)
-# PPPoE MTU 1492，缺 MSS 钳制会导致大包被 PMTUD 黑洞丢弃(已连接但打不开网页)，显式钳制。
-[ -n "$WAN_FW" ] && uci set ${WAN_FW}.mtu_fix='1'
-while uci -q delete firewall.@forwarding[0]; do :; done
-uci add firewall forwarding
-uci set firewall.@forwarding[-1].src='lan'
-uci set firewall.@forwarding[-1].dest='wan'
-EOF
-)
-
-    # full 共用：dns-hijack + firewall include（放在最后，避免上游未就绪时形成黑洞）
-    DNS_HIJACK_BLK=$(cat <<'EOF'
-chmod 755 /usr/sbin/dns-hijack
-/usr/sbin/dns-hijack
-uci -q delete firewall.dns_hijack_include
-uci set firewall.dns_hijack_include=include
-uci set firewall.dns_hijack_include.path='/usr/sbin/dns-hijack'
-uci set firewall.dns_hijack_include.enabled='1'
-uci commit firewall
-EOF
-)
-
-    # full 共用：启用 UPnP/IGD 并绑 lan->wan（miniupnpd 已编入镜像）
-    UPNP_BLK=$(cat <<'EOF'
-uci -q get upnpd.config >/dev/null || uci set upnpd.config=upnpd
-uci set upnpd.config.enabled='1'
-uci set upnpd.config.internal_iface='lan'
-uci set upnpd.config.external_iface='wan'
-# secure=0：放宽 secure_mode，避免老设备 UPnP 映射被丢弃；miniupnpd 仅监听 lan 不外泄
-uci set upnpd.config.secure='0'
-uci commit upnpd
-/etc/init.d/miniupnpd enable
-/etc/init.d/miniupnpd restart
-EOF
-)
-
-    # 远程 syslog（仅 --log-server 指定时生成）：UDP 514 推给对端 syslog 采集端，非网页访问
-    if [ -n "$LOG_SERVER" ]; then
-        REMOTE_SYSLOG_BLK=$(cat <<EOF
-uci set system.@system[0].log_ip='$log_server_esc'
-uci set system.@system[0].log_port='514'
-uci set system.@system[0].log_proto='udp'
-EOF
-)
-    else
-        REMOTE_SYSLOG_BLK=""
-    fi
-
-    # full 共用：DHCP 公共段（范围、RA、下发单 DNS 等）
-    DHCP_COMMON_BLK=$(cat <<EOF
-uci -q delete dhcp.lan.dhcp_option
-uci add_list dhcp.lan.dhcp_option='6,$ip_esc'
-uci set dhcp.lan.start='11'
-uci set dhcp.lan.limit='149'
-uci set dhcp.lan.dhcpv6='server'
-uci set dhcp.lan.ra='server'
-# 通告本机为 IPv6 默认网关（否则客户端有地址无路由）
-uci set dhcp.lan.ra_default='1'
-uci -q set dhcp.@dnsmasq[0].rebind_protection='0'
-uci set dhcp.@dnsmasq[0].sequential_ip='1'
-EOF
-)
-
-    # WAN 段(PPPoE/DHCP)提前生成避免重复；WAN 设备不写死，由 board.d 首启探测(eth1 存在则作 WAN)。
-    if [ "$PROFILE_TYPE" = "full" ]; then
-        if [ -n "$PPPOE_USERNAME" ]; then
-            u=$(_escape_uci "$PPPOE_USERNAME"); p=$(_escape_uci "$PPPOE_PASSWORD")
-            WAN_BLK=$(cat <<EOT
-uci set network.wan.proto='pppoe'
-uci set network.wan.username='$u'
-uci set network.wan.password='$p'
-            uci set network.wan.ipv6='auto'
-            uci set network.wan.peerdns='1'
-            uci -q delete network.wan6
-EOT
-)
-        else
-            WAN_BLK=$(cat <<EOT
-            uci set network.wan.proto='dhcp'
-            uci set network.wan.peerdns='1'
-            uci set network.wan6.proto='dhcpv6'
-uci set network.wan6.reqaddress='try'
-uci set network.wan6.reqprefix='auto'
-EOT
-)
-        fi
-    fi
+    # ===== FanchmWrt 精简分支（仅 IP/WAN/主机名；无 OC/ADGH/DNS_HIJACK/OAF） =====
+    case "$PROFILE_TYPE" in
+      bypass) FB_PROFILE="mini" ;;
+      *)      FB_PROFILE="default" ;;
+    esac
+    mkdir -p "$FB_DIR/etc/firstboot-pkgs"
+    echo "$FB_PROFILE" > "$FB_DIR/etc/firstboot-pkgs/profile"
 
     echo '#!/bin/sh' > "$OUT"
-    echo "logger -t uci-defaults \"开始应用${PROFILE_TYPE}配置\"" >> "$OUT"
+    echo "logger -t uci-defaults \"开始应用 LeenWrt ${PROFILE_TYPE} 配置\"" >> "$OUT"
+
+    # FanchmWrt x86 默认 network 由 board.d/03-default-network 在首启生成：源码原把“末口”当 WAN、其余桥接为 LAN。
+    # 翻转为“首口=WAN”（其余桥接为 LAN）。board.d 会正确建立 DSA br-lan 桥，main 无需 diy 再处理端口；
+    # 旁路由在下方单独把全部网口桥接为 LAN（无独立 WAN）。
+    _SRC_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../openwrt" 2>/dev/null && pwd || true)"
+    [ -z "$_SRC_ROOT" ] && _SRC_ROOT="."
+    _03net="$_SRC_ROOT/target/linux/x86/base-files/etc/board.d/03-default-network"
+    if [ -f "$_03net" ]; then
+      sed -i 's/\[ "$idx" -eq "$eth_count" \]/[ "$idx" -eq 1 ]/' "$_03net"
+    fi
 
     if [ "$PROFILE_TYPE" = "bypass" ]; then
         gw_esc=$(_escape_uci "$CUSTOM_GATEWAY")
         cat >> "$OUT" <<EOT
-$IP_FORWARD_LN
 uci set network.lan.proto='static'
 uci set network.lan.ipaddr='$ip_esc'
 uci set network.lan.netmask='$SUBNET_MASK'
@@ -260,106 +130,76 @@ uci commit network
 
 uci set dhcp.lan.ignore='1'
 uci set dhcp.lan6.ignore='1'
-uci -q set dhcp.@dnsmasq[0].port='5453'
 uci -q set dhcp.@dnsmasq[0].rebind_protection='0'
-uci set dhcp.@dnsmasq[0].dns_redirect='0'
-# 旁路由 dnsmasq 仅作 ADGH 兜底(:5453)，noresolv=1 不读空 resolv.conf。
-uci -q delete dhcp.@dnsmasq[0].server
-uci add_list dhcp.@dnsmasq[0].server='$DNS_MAIN'
-uci add_list dhcp.@dnsmasq[0].server='$DNS_BACKUP'
-uci set dhcp.@dnsmasq[0].noresolv='1'
-uci commit dhcp
-
-LAN_FW=\$(uci show firewall | grep "\.name='lan'" | cut -d. -f1-2)
-WAN_FW=\$(uci show firewall | grep "\.name='wan'" | cut -d. -f1-2)
-[ -n "\$LAN_FW" ] && {
-    uci set \${LAN_FW}.input='ACCEPT'
-    uci set \${LAN_FW}.output='ACCEPT'
-    uci set \${LAN_FW}.forward='ACCEPT'
-    uci set \${LAN_FW}.masq='1'
-    uci set \${LAN_FW}.mtu_fix='1'
-}
-[ -n "\$WAN_FW" ] && {
-    uci set \${WAN_FW}.network=''
-    uci set \${WAN_FW}.masq='0'
-}
-while uci -q delete firewall.@forwarding[0]; do :; done
-uci commit firewall
-
-$OC_CONFIG_BLK
-$ADGH_ENABLE_BLK
-EOT
-    elif [ "$PROFILE_TYPE" = "full" ]; then
-        cat >> "$OUT" <<EOT
-$WAN_BLK
-$LAN_WAN_COMMON_BLK
-
-$IP_FORWARD_LN
-
-$DHCP_COMMON_BLK
-EOT
-        if [ "$NO_ADGH" = "1" ]; then
-            # ADGH 关闭：dnsmasq 占 :53
-            if [ "$WITH_OC" = "1" ]; then
-                # OC 开：dnsmasq 上游指向 OC redir-host(:7874) + 阿里云兜底，OC 停时仍解析
-                cat >> "$OUT" <<EOT
-uci -q delete dhcp.@dnsmasq[0].port
-uci -q delete dhcp.@dnsmasq[0].server
-uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#7874'
-uci add_list dhcp.@dnsmasq[0].server='$DNS_MAIN'
-uci add_list dhcp.@dnsmasq[0].server='$DNS_BACKUP'
-uci set dhcp.@dnsmasq[0].noresolv='1'
-uci set dhcp.@dnsmasq[0].dns_redirect='0'
 uci commit dhcp
 EOT
-            else
-                # OC 关 + ADGH 关：dnsmasq 直连上游 DNS（纯主路由，无需旁路）
-                cat >> "$OUT" <<EOT
-uci -q delete dhcp.@dnsmasq[0].port
-uci -q delete dhcp.@dnsmasq[0].server
-uci add_list dhcp.@dnsmasq[0].server='$DNS_MAIN'
-uci add_list dhcp.@dnsmasq[0].server='$DNS_BACKUP'
-uci set dhcp.@dnsmasq[0].noresolv='1'
-uci set dhcp.@dnsmasq[0].dns_redirect='0'
-uci commit dhcp
+        # 旁路由：所有网口桥接为 LAN（无独立 WAN），显式重建 br-lan 设备
+        cat >> "$OUT" <<'EOT'
+# 旁路由 LAN 桥接重建
+_fw_all=$(ls /sys/class/net 2>/dev/null | grep -E '^eth[0-9]+$' | sort -V)
+if [ -n "$_fw_all" ]; then
+  for _d in $(uci show network 2>/dev/null | sed -n "s/^\(network\.[^.]*\)\.name='br-lan'$/\1/p"); do
+    uci -q delete "$_d"
+  done
+  uci set network.br_lan=device
+  uci set network.br_lan.name='br-lan'
+  uci set network.br_lan.type='bridge'
+  uci -q delete network.br_lan.ports
+  for _e in $_fw_all; do
+    uci add_list network.br_lan.ports="$_e"
+  done
+  uci set network.lan.device='br-lan'
+  uci -q delete network.lan.type
+  uci -q delete network.lan.ports
+  uci -q delete network.lan.ifname
+  uci commit network
+fi
 EOT
-            fi
+    else
+        if [ -n "$PPPOE_USERNAME" ]; then
+            u=$(_escape_uci "$PPPOE_USERNAME"); p=$(_escape_uci "$PPPOE_PASSWORD")
+            WAN_FANCHM=$(cat <<EOT
+uci set network.wan.proto='pppoe'
+uci set network.wan.username='$u'
+uci set network.wan.password='$p'
+uci set network.wan.ipv6='auto'
+uci set network.wan.peerdns='1'
+uci -q delete network.wan6
+EOT
+)
         else
-            # 带 ADGH：dnsmasq 让出 :53(port 5453)，AdGuardHome 占 :53，纯阿里云兜底
-            cat >> "$OUT" <<EOT
-uci -q set dhcp.@dnsmasq[0].port='5453'
-uci -q delete dhcp.@dnsmasq[0].server
-uci add_list dhcp.@dnsmasq[0].server='$DNS_MAIN'
-uci add_list dhcp.@dnsmasq[0].server='$DNS_BACKUP'
-uci set dhcp.@dnsmasq[0].noresolv='1'
-uci set dhcp.@dnsmasq[0].dns_redirect='0'
-uci commit dhcp
+            WAN_FANCHM=$(cat <<EOT
+uci set network.wan.proto='dhcp'
+uci set network.wan.peerdns='1'
+uci set network.wan6.proto='dhcpv6'
+uci set network.wan6.reqaddress='try'
+uci set network.wan6.reqprefix='auto'
 EOT
+)
         fi
         cat >> "$OUT" <<EOT
-$LAN_FORWARD_BLK
+$WAN_FANCHM
+uci set network.lan.proto='static'
+uci set network.lan.ipaddr='$ip_esc'
+uci set network.lan.netmask='$SUBNET_MASK'
+uci commit network
 
-$UPNP_BLK
+uci -q delete dhcp.lan.dhcp_option
+uci add_list dhcp.lan.dhcp_option='6,$ip_esc'
+uci set dhcp.lan.start='7'
+uci set dhcp.lan.limit='149'
+uci set dhcp.lan.dhcpv6='server'
+uci set dhcp.lan.ra='server'
+uci -q set dhcp.@dnsmasq[0].rebind_protection='0'
+uci set dhcp.@dnsmasq[0].sequential_ip='1'
+uci commit dhcp
 EOT
-        if [ "$WITH_OC" = "1" ]; then
-            cat >> "$OUT" <<EOT
-$OC_CONFIG_BLK
-EOT
-        fi
-        if [ "$NO_ADGH" != "1" ]; then
-            cat >> "$OUT" <<EOT
-$ADGH_ENABLE_BLK
-
-$DNS_HIJACK_BLK
-EOT
-        fi
     fi
 
-    # 流卸载默认开启
-    FLOFF=1; FLOFF_HW=1
     cat >> "$OUT" <<EOT
-uci set firewall.@defaults[0].flow_offloading='$FLOFF'
-uci set firewall.@defaults[0].flow_offloading_hw='$FLOFF_HW'
+# fwx 应用过滤(DPI 内核模块)依赖 conntrack，与流卸载冲突会导致连接不稳/应用过滤失效，故关闭
+uci set firewall.@defaults[0].flow_offloading='0'
+uci set firewall.@defaults[0].flow_offloading_hw='0'
 uci commit firewall
 
 uci set system.@system[0].hostname='LeenWrt'
@@ -370,30 +210,25 @@ uci add_list system.ntp.server='ntp.aliyun.com'
 uci add_list system.ntp.server='cn.pool.ntp.org'
 uci commit system
 
-$REMOTE_SYSLOG_BLK
-uci commit system
-/etc/init.d/log restart
-
-# 固定 CPU 为 performance 模式，避免降频抖动
 chmod 755 /etc/init.d/cpufreq-perf
 /etc/init.d/cpufreq-perf enable
 /etc/init.d/cpufreq-perf start
 
-# 首启离线安装 apps/ 的 .apk：仅 enable，由 rc.d(S99) 启动后期执行(避免早期 apk 库未就绪)
+chmod 755 /etc/init.d/firstboot-pkgs
 /etc/init.d/firstboot-pkgs enable
+/etc/init.d/firstboot-pkgs start
 
+# FanchmWrt 的 uhttpd 首启不会自动拉起（immortalWrt 不受影响），兜底 enable+start 确保后台立即可访问
+if [ -x /etc/init.d/uhttpd ]; then
+    /etc/init.d/uhttpd enable 2>/dev/null
+    /etc/init.d/uhttpd start 2>/dev/null
+fi
+[ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd enable 2>/dev/null
 
-logger -t uci-defaults "配置应用完成"
+logger -t uci-defaults "LeenWrt 配置应用完成"
 EOT
-    chmod 755 "$OUT"
-    echo "[diy] 输出: $OUT"
-
-    if [ -n "$ROOT_PASSWORD" ]; then
-        command -v openssl >/dev/null 2>&1 || error_exit "缺失依赖: openssl (用于 root 密码哈希)"
-        crypt=$(printf '%s' "$ROOT_PASSWORD" | openssl passwd -6 -stdin) || error_exit "openssl密码加密失败"
-        echo "root:$crypt:0:0:99999:7:::" > "$SHADOW"
-        chmod 600 "$SHADOW" 2>/dev/null || true
-    fi
+    chmod 755 "$OUT" 2>/dev/null || true
+    echo "[diy] 输出: $OUT (FanchmWrt lean)"
     ;;
 *) error_exit "PHASE仅支持 before / after" ;;
 esac

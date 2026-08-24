@@ -1,0 +1,83 @@
+#!/bin/sh /etc/rc.common
+# FanchmWrt 首启在线/离线安装服务
+# 等待网络连通后：
+#   1) 离线安装 /etc/firstboot-pkgs/apps/*.apk（自编译或本地上传的预编译包，允许未签名；
+#      来源需与目标内核 vermagic 匹配，否则 kmod 无法加载）
+#   2) 在线安装 lists/ 中的官方源包：common.txt 始终安装；非 Mini 档额外安装 default.txt
+# 完成后自禁用并清理本服务，避免每次启动重复安装。
+START=99
+STOP=10
+
+install_all() {
+    # 1) 离线 .apk（自编译包，允许未签名）
+    if [ -d /etc/firstboot-pkgs/apps ]; then
+        for f in /etc/firstboot-pkgs/apps/*.apk; do
+            [ -f "$f" ] || continue
+            if apk --allow-untrusted add "$f" >/dev/null 2>&1; then
+                rm -f "$f"
+            else
+                logger -t firstboot-pkgs "离线安装失败(保留待查): $f"
+            fi
+        done
+    fi
+
+    # 2) 在线官方源包（lists 文本：每行一个包名，# 开头为注释）
+    #    逐包安装：apk 默认整批原子提交，列表中任一包名缺失/失败会导致整批不装；
+    #    曾因列表中某个非核心包在 25.12 源不存在（更名/移除）而整批失败、连 luci 都没装上，
+    #    导致进不去后台。改为逐包安装 + 失败仅记录，保证核心包一定装得上。
+    local prof pkg_list pkg
+    prof=$(cat /etc/firstboot-pkgs/profile 2>/dev/null)
+    install_list() {
+        [ -f "$1" ] || return 0
+        pkg_list=$(grep -v '^#' "$1" | grep -v '^$')
+        for pkg in $pkg_list; do
+            if apk add "$pkg" >/dev/null 2>&1; then
+                logger -t firstboot-pkgs "已安装: $pkg"
+            else
+                logger -t firstboot-pkgs "安装失败(跳过): $pkg"
+            fi
+        done
+    }
+    if ! apk update >/dev/null 2>&1; then
+        logger -t firstboot-pkgs "apk update 失败：跳过在线安装（检查 /etc/apk/repositories 与联网）"
+    else
+        # common 始终安装；Mini 档无专属包（仅 common），Main 档额外安装 default.txt
+        install_list /etc/firstboot-pkgs/lists/common.txt
+        [ "$prof" != "mini" ] && install_list /etc/firstboot-pkgs/lists/default.txt
+    fi
+
+    # 安装完成后刷新 Web 后台，加载新装的 luci-app-* 模块（uhttpd 需 restart 才能识别）
+    [ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd restart 2>/dev/null
+    [ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd restart 2>/dev/null
+
+    # 自清理：禁用并删除本服务，避免后续启动重复执行
+    /etc/init.d/firstboot-pkgs disable 2>/dev/null
+    rm -f /etc/init.d/firstboot-pkgs
+    rm -rf /etc/firstboot-pkgs
+}
+
+wait_net() {
+    # 等待到公网可达（不依赖具体接口，旁路由无 wan 也能靠网关路由出去）
+    local i=0
+    while [ $i -lt 30 ]; do
+        if ping -c1 -W2 223.5.5.5 >/dev/null 2>&1; then
+            return 0
+        fi
+        i=$((i + 1))
+        sleep 4
+    done
+    return 1
+}
+
+start() {
+    # 后台执行，避免阻塞系统启动；网络就绪才安装并清理，否则保留服务下次启动重试
+    (
+        if wait_net; then
+            install_all
+        else
+            logger -t firstboot-pkgs "等待网络超时，保留服务下次启动重试"
+        fi
+    ) &
+}
+
+stop() { :; }
