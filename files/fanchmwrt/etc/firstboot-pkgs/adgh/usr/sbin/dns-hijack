@@ -10,8 +10,17 @@ if [ ! -x /usr/bin/AdGuardHome ]; then
     logger -t dns-hijack "AdGuardHome 未安装，跳过劫持（回退 DHCP DNS）"
     exit 0
 fi
-if ! (command -v ss >/dev/null 2>&1 && ss -lun 2>/dev/null | grep -q ':53 ' \
-      || command -v netstat >/dev/null 2>&1 && netstat -lun 2>/dev/null | grep -q ':53 '); then
+# 二进制在但进程未监听 :53（崩溃/未起），同样跳过，避免重定向到空端口
+port_listen() {
+    if command -v ss >/dev/null 2>&1; then
+        ss -lun 2>/dev/null | grep -q ':53 '
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -lun 2>/dev/null | grep -q ':53 '
+    else
+        return 1
+    fi
+}
+if ! port_listen; then
     logger -t dns-hijack "AdGuardHome 未在监听 :53，跳过劫持（回退 DHCP DNS）"
     exit 0
 fi
