@@ -1,11 +1,6 @@
 #!/bin/sh /etc/rc.common
-# FanchmWrt 首启在线/离线安装服务
-# 等待网络连通后：
-#   1) 离线安装 /etc/firstboot-pkgs/apps/*.apk（自编译或本地上传的预编译包，允许未签名；
-#      来源需与目标内核 vermagic 匹配，否则 kmod 无法加载）
-#   2) 在线安装 lists/ 中的官方源包：common.txt 始终安装；非 Mini 档额外安装 default.txt
-#   3) OC/ADGH 首启布链（apply_dns_chain）：安装后写回自定义文件并应用 DNS 过滤链（可独立勾选；main 含 dns-hijack）
-# 完成后自禁用并清理本服务，避免每次启动重复安装。
+# FanchmWrt 首启安装服务：联网后离线装 .apk + 在线装 lists/，再布 OC/ADGH DNS 链，完成自清理
+# 离线 .apk 来源须与目标内核 vermagic 匹配，否则 kmod 无法加载
 START=99
 STOP=10
 
@@ -22,7 +17,7 @@ install_all() {
         done
     fi
 
-    # 在线官方源包：逐包安装（apk 整批原子提交，任一包缺失会整批失败，曾致 luci 未装、进不去后台）
+    # 在线官方源包逐包安装（apk 原子提交，整批失败会漏装 luci）
     local prof pkg_list pkg
     prof=$(cat /etc/firstboot-pkgs/profile 2>/dev/null)
     install_list() {
@@ -39,36 +34,34 @@ install_all() {
     if ! apk update >/dev/null 2>&1; then
         logger -t firstboot-pkgs "apk update 失败：跳过在线安装（检查 /etc/apk/repositories 与联网）"
     else
-        # common 始终安装；Mini 档无专属包（仅 common），Main 档额外安装 default.txt
+        # common 始终装；非 Mini 额外装 default.txt
         install_list /etc/firstboot-pkgs/lists/common.txt
         [ "$prof" != "mini" ] && install_list /etc/firstboot-pkgs/lists/default.txt
-        # OC/ADGH 首启布链：必须在在线安装成功（包已装上）之后执行；
-        # 放此分支内，确保 apk update 失败时绝不布链（避免无 ADGH 时 dns-hijack 致 DNS 全断）
+        # 布链放此分支内：apk update 失败则绝不布链，避免无 ADGH 时断网
         apply_dns_chain "$prof"
     fi
 
-    # 安装完成后刷新 Web 后台，加载新装的 luci-app-* 模块（uhttpd 需 restart 才能识别）
+    # 重启 Web 服务以加载新装的 luci-app-*
     [ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd restart 2>/dev/null
     [ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd restart 2>/dev/null
 
-    # 自清理：禁用并删除本服务，避免后续启动重复执行
+    # 自清理，避免重复执行
     /etc/init.d/firstboot-pkgs disable 2>/dev/null
     rm -f /etc/init.d/firstboot-pkgs
     rm -rf /etc/firstboot-pkgs
 }
 
-# 首启安装 OC/ADGH 后应用 DNS 过滤链（解决首启时序：uci schema 需包已装）
-# 二者可独立勾选，组合出四种拓扑：
-#   neither : dnsmasq :53 默认（直连 223.5.5.5/223.6.6.6），不劫持
-#   ADGH    : dnsmasq :5453 -> ADGH :53（ADGH 上游自带 OC:7874 兜底 dnsmasq:5453，无 OC 时自动跳过）
-#   OC      : dnsmasq :53 -> OC :7874（OC redir-host，dnsmasq 上游指向 OC）
-#   both    : dnsmasq :5453 -> ADGH :53 -> OC :7874
-# 门控：勾选的列表才会被拷入镜像首启目录，据此判断装了哪些
+# 首启布 DNS 链（包已装才执行）。四种拓扑：
+#   neither: dnsmasq :53 默认直连公网 DNS
+#   ADGH   : dnsmasq :5453 -> ADGH :53（ADGH 上游可带 OC:7874 兜底）
+#   OC     : dnsmasq :53 -> OC :7874（redir-host）
+#   both   : dnsmasq :5453 -> ADGH :53 -> OC :7874
+# 门控依据：勾选列表才被拷入镜像首启目录
 apply_dns_chain() {
     local prof="$1"
     local have_adgh=0 have_oc=0
 
-    # 勾选门控：对应列表未被拷入镜像即视为未勾选（保持默认 DNS）
+    # 勾选门控：列表未拷入镜像即视为未勾选
     [ -f /etc/firstboot-pkgs/lists/adguardhome.txt ] && have_adgh=1
     [ -f /etc/firstboot-pkgs/lists/openclash.txt ]  && have_oc=1
     [ "$have_adgh" = "0" ] && [ "$have_oc" = "0" ] && {
@@ -76,7 +69,7 @@ apply_dns_chain() {
         return 0
     }
 
-    # apk add 可能覆盖 vendored 的 /etc 文件，故安装后再把 staging 写回真实路径
+    # apk add 可能覆盖 vendored 文件，安装后写回真实路径
     [ "$have_adgh" = "1" ] && [ -d /etc/firstboot-pkgs/adgh ] && {
         cp -rf /etc/firstboot-pkgs/adgh/etc/* /etc/ 2>/dev/null
         cp -rf /etc/firstboot-pkgs/adgh/usr/* /usr/ 2>/dev/null
@@ -85,7 +78,7 @@ apply_dns_chain() {
         cp -rf /etc/firstboot-pkgs/openclash/etc/* /etc/ 2>/dev/null
     }
 
-    # OpenClash uci（Meta / redir-host；sniffer 由 custom_overwrite 开启）
+    # OpenClash：Meta / redir-host，sniffer 由 custom_overwrite 开启
     if [ "$have_oc" = "1" ] && { [ -x /etc/init.d/openclash ] || command -v openclash >/dev/null 2>&1; }; then
         uci -q get openclash.config.core_type >/dev/null || uci set openclash.config=openclash
         uci set openclash.config.core_type='Meta'
@@ -107,11 +100,10 @@ apply_dns_chain() {
         logger -t firstboot-pkgs "AdGuardHome 已启用并启动"
     fi
 
-    # DNS 拓扑：仅当 AdGuardHome 真实装上（/usr/bin/AdGuardHome 存在）才布链；
-    # 否则保持 dnsmasq :53 默认，避免劫持 DNS 致断网
+    # 仅当 ADGH 真实装上（/usr/bin/AdGuardHome 存在）才布链，否则保持 dnsmasq :53 默认
     if [ -x /usr/bin/AdGuardHome ]; then
         if [ "$prof" = "mini" ]; then
-            # 旁路由：dnsmasq :5453（DHCP ignore 由 99-custom 设置），ADGH :53；无 dns-hijack
+            # 旁路由：dnsmasq :5453 -> ADGH :53（无 dns-hijack）
             uci -q set dhcp.@dnsmasq[0].port='5453'
             uci -q set dhcp.@dnsmasq[0].rebind_protection='0'
             uci -q set dhcp.@dnsmasq[0].dns_redirect='0'
@@ -122,7 +114,7 @@ apply_dns_chain() {
             uci commit dhcp
             logger -t firstboot-pkgs "旁路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53$([ "$have_oc" = 1 ] && echo ' -> OC :7874')（无 dns-hijack）"
         else
-            # 主路由：dnsmasq :5453，ADGH :53
+            # 主路由：dnsmasq :5453 -> ADGH :53
             uci -q set dhcp.@dnsmasq[0].port='5453'
             uci -q delete dhcp.@dnsmasq[0].server
             uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
@@ -130,14 +122,12 @@ apply_dns_chain() {
             uci set dhcp.@dnsmasq[0].noresolv='1'
             uci set dhcp.@dnsmasq[0].dns_redirect='0'
             uci commit dhcp
-            # DNS 劫持开关：1=重定向 LAN :53 -> ADGH（默认）；0=reject LAN 出向 :53 强制回退 DHCP DNS
-            # 劫持偏好持久化到 uci，由 adguardhome 服务按生命周期布/清（ADGH 监听 :53 才劫持）
+            # 劫持开关持久化到 uci，由 adguardhome 服务按生命周期布/清（监听 :53 才劫持）
             DNS_HIJACK=$(cat /etc/firstboot-pkgs/dns_hijack 2>/dev/null || echo 1)
             uci set adguardhome.config.dns_hijack="$DNS_HIJACK"
             uci commit adguardhome
             if [ "$DNS_HIJACK" = "0" ]; then
-                # 不劫持：REJECT LAN 出向 :53（udp/tcp），立即回退到 DHCP 公告的路由器 DNS(ADGH)
-                # 排除旁路由 IP（同网段 .2）：双路由部署下旁路由 dnsmasq 上游走公网 :53，源在 lan 区会被误杀
+                # 不劫持：REJECT LAN 出向 :53，回退 DHCP DNS；排除旁路由 IP 防误杀
                 BYPASS_IP=$(uci -q get network.lan.ipaddr 2>/dev/null | sed 's/\.[0-9]*$/.2/')
                 for _z in wan wan6; do
                     uci -q get firewall.$_z >/dev/null 2>&1 || continue
@@ -158,7 +148,7 @@ apply_dns_chain() {
             fi
         fi
     elif [ "$have_oc" = "1" ]; then
-        # 仅 OC（无 ADGH）：dnsmasq :53 不动，上游指向 OC :7874（redir-host 经 OC 解析）
+        # 仅 OC：dnsmasq :53 上游指向 OC :7874
         uci -q delete dhcp.@dnsmasq[0].server
         uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#7874'
         uci set dhcp.@dnsmasq[0].noresolv='1'
@@ -171,14 +161,13 @@ apply_dns_chain() {
 }
 
 wait_net() {
-    # 等待到公网可达（不依赖具体接口，旁路由无 wan 也能靠网关路由出去）
-    # 不只看 ICMP：部分网络丢弃 ping 但 TCP/HTTPS 通，故以 ping 或 HTTPS 可达任一为真
+    # 等公网可达：ping 或 HTTPS 任一为真（旁路由无 wan 也能靠网关出）
     local i=0
     while [ $i -lt 30 ]; do
         if ping -c1 -W2 223.5.5.5 >/dev/null 2>&1; then
             return 0
         fi
-        # HTTPS 真实可达性探测（避免 ICMP 被丢弃误判断网）
+        # HTTPS 可达性探测（ICMP 可能被丢弃）
         if wget -T 4 -q -O /dev/null https://connectivitycheck.gstatic.com/generate_204 2>/dev/null \
            || wget -T 4 -q -O /dev/null https://www.qualcomm.com/ 2>/dev/null; then
             return 0
@@ -190,7 +179,7 @@ wait_net() {
 }
 
 start() {
-    # 后台执行，避免阻塞系统启动；网络就绪才安装并清理，否则保留服务下次启动重试
+    # 后台执行，网络就绪才装；超时则保留服务下次重试
     (
         if wait_net; then
             install_all

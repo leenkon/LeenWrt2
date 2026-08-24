@@ -1,8 +1,6 @@
 #!/bin/sh /etc/rc.common
 #
-# AdGuardHome 启动脚本（官方预编译二进制方案）
-# 取代 feeds 包的 init：以 root 运行（绑定 53 需特权），无需 capabilities jail。
-# 配置复用 files/etc/adguardhome/adguardhome.yaml，运行时数据放在 /var/lib/adguardhome。
+# AdGuardHome 启动脚本（官方预编译二进制：以 root 运行绑定 53，复用 /etc/adguardhome/adguardhome.yaml，运行数据 /var/lib/adguardhome）
 
 START=19
 STOP=89
@@ -16,7 +14,7 @@ boot() {
 }
 
 start_service() {
-	# 开机阶段先不启动，等接口 up 后再拉起，避免网络未就绪导致解析失败
+	# 开机阶段延迟启动，等接口 up 再拉起
 	[ -n "$ADGUARDHOME_BOOT" ] && return 0
 
 	config_load adguardhome
@@ -37,8 +35,7 @@ start_service() {
 	procd_set_param respawn
 	procd_close_instance
 
-	# DNS 劫持生命周期绑定到 ADGH：仅当 ADGH 真正监听 :53 后才布劫持，
-	# 避免“装完即劫持”指向尚未就绪的 :53；stop_service 负责清表。
+	# 劫持生命周期绑定 ADGH：仅监听 :53 后才布，停时清表（见 stop_service）
 	local dhijack
 	config_get_bool dhijack config dns_hijack 1
 	if [ "$dhijack" = "1" ] && [ -x /usr/sbin/dns-hijack ]; then
@@ -58,13 +55,12 @@ start_service() {
 service_triggers() {
 	procd_add_reload_trigger adguardhome
 	if [ -n "$ADGUARDHOME_BOOT" ]; then
-		# 等待接口 up 后真正启动（解决 https://github.com/openwrt/packages/issues/21868 类问题）
+		# 接口 up 后再真正启动（避开首启网络未就绪）
 		procd_add_raw_trigger 'interface.*.up' 5000 /etc/init.d/adguardhome restart
 	fi
 }
 
-# ADGH 停止/卸载时立即清除 DNS 劫持表，避免重定向到已不存在的 :53 致断网
-# 劫持生命周期已绑定到本服务：start_service 在 ADGH 监听 :53 后才布，stop_service 负责清表
+# 停止/卸载时清表，避免重定向到已不存在的 :53 致断网
 stop_service() {
 	nft delete table inet dns_hijack 2>/dev/null
 	logger -t adguardhome "已清除 dns_hijack 规则（回退 DHCP DNS）"

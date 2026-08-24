@@ -78,8 +78,7 @@ before)
     rm -f feeds.conf
     cp "$FEED_CONF_SRC" feeds.conf
 
-    # 修复 fwxd 联网状态误判：原逻辑只 ping/HTTPS 测 baidu，ADGH 上游 OC failover 慢时易误判为未联网
-    # 补丁：优先 TCP 测公共 DNS 53 端口（不依赖本机 DNS），并放宽 ping/tcp 超时
+    # 修复 fwxd 联网误判：补丁优先 TCP 测公共 DNS :53，放宽超时
     FWXD_PATCH="$PROJECT_ROOT/patches/fwxd-internet-check.patch"
     if [ -f "$FWXD_PATCH" ] && [ -f package/fcm/fwxd/src/check_main.c ]; then
         patch -p0 < "$FWXD_PATCH" >/dev/null 2>&1 && echo "[diy] 已应用 fwxd 联网检测补丁" \
@@ -100,7 +99,7 @@ after)
 
     ip_esc=$(_escape_uci "$CUSTOM_IP")
 
-    # FanchmWrt 分支：diy.sh 仅写 IP/WAN/主机名/flow_offloading；OC/ADGH/DNS_HIJACK 由 firstboot-pkgs 首启安装后布设
+    # FanchmWrt：diy.sh 仅写 IP/WAN/主机名/flow_offloading；OC/ADGH/DNS_HIJACK 由首启 firstboot-pkgs 布设
     case "$PROFILE_TYPE" in
       bypass) FB_PROFILE="mini" ;;
       *)      FB_PROFILE="default" ;;
@@ -111,9 +110,7 @@ after)
     echo '#!/bin/sh' > "$OUT"
     echo "logger -t uci-defaults \"开始应用 LeenWrt ${PROFILE_TYPE} 配置\"" >> "$OUT"
 
-    # FanchmWrt x86 默认 network 由 board.d/03-default-network 在首启生成：源码原把“末口”当 WAN、其余桥接为 LAN。
-    # 翻转为“首口=WAN”（其余桥接为 LAN）。board.d 会正确建立 DSA br-lan 桥，main 无需 diy 再处理端口；
-    # 旁路由在下方单独把全部网口桥接为 LAN（无独立 WAN）。
+    # x86 网口翻转：源码默认末口=WAN，翻为首口=WAN（其余桥接 LAN）；旁路由下方单独全桥接 LAN
     _SRC_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../openwrt" 2>/dev/null && pwd || true)"
     [ -z "$_SRC_ROOT" ] && _SRC_ROOT="."
     _03net="$_SRC_ROOT/target/linux/x86/base-files/etc/board.d/03-default-network"
@@ -141,7 +138,7 @@ uci set dhcp.lan6.ignore='1'
 uci -q set dhcp.@dnsmasq[0].rebind_protection='0'
 uci commit dhcp
 EOT
-        # 旁路由：所有网口桥接为 LAN（无独立 WAN），显式重建 br-lan 设备
+        # 旁路由：所有网口桥接为 LAN，重建 br-lan
         cat >> "$OUT" <<'EOT'
 # 旁路由 LAN 桥接重建
 _fw_all=$(ls /sys/class/net 2>/dev/null | grep -E '^eth[0-9]+$' | sort -V)
@@ -207,7 +204,7 @@ EOT
     fi
 
     cat >> "$OUT" <<EOT
-# fwx 应用过滤(DPI 内核模块)依赖 conntrack，与流卸载冲突会导致连接不稳/应用过滤失效，故关闭
+# fwx 依赖 conntrack，与流卸载冲突，关闭 flow_offloading
 uci set firewall.@defaults[0].flow_offloading='0'
 uci set firewall.@defaults[0].flow_offloading_hw='0'
 uci commit firewall
@@ -228,7 +225,7 @@ chmod 755 /etc/init.d/firstboot-pkgs
 /etc/init.d/firstboot-pkgs enable
 /etc/init.d/firstboot-pkgs start
 
-# FanchmWrt 的 uhttpd 首启不会自动拉起（immortalWrt 不受影响），兜底 enable+start 确保后台立即可访问
+    # FanchmWrt 的 uhttpd 首启不自动拉起，兜底 enable+start
 if [ -x /etc/init.d/uhttpd ]; then
     /etc/init.d/uhttpd enable 2>/dev/null
     /etc/init.d/uhttpd start 2>/dev/null
