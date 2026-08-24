@@ -10,7 +10,7 @@ START=99
 STOP=10
 
 install_all() {
-    # 1) 离线 .apk（自编译包，允许未签名）
+    # 离线 .apk（允许未签名）
     if [ -d /etc/firstboot-pkgs/apps ]; then
         for f in /etc/firstboot-pkgs/apps/*.apk; do
             [ -f "$f" ] || continue
@@ -22,10 +22,7 @@ install_all() {
         done
     fi
 
-    # 2) 在线官方源包（lists 文本：每行一个包名，# 开头为注释）
-    #    逐包安装：apk 默认整批原子提交，列表中任一包名缺失/失败会导致整批不装；
-    #    曾因列表中某个非核心包在 25.12 源不存在（更名/移除）而整批失败、连 luci 都没装上，
-    #    导致进不去后台。改为逐包安装 + 失败仅记录，保证核心包一定装得上。
+    # 在线官方源包：逐包安装（apk 整批原子提交，任一包缺失会整批失败，曾致 luci 未装、进不去后台）
     local prof pkg_list pkg
     prof=$(cat /etc/firstboot-pkgs/profile 2>/dev/null)
     install_list() {
@@ -102,7 +99,7 @@ apply_dns_chain() {
         logger -t firstboot-pkgs "OpenClash 已配置并启用"
     fi
 
-    # AdGuardHome 启用 + 启动（自定义 init.d 以 root 运行绑定 :53）
+    # 启用并启动 AdGuardHome
     if [ "$have_adgh" = "1" ] && [ -x /etc/init.d/adguardhome ]; then
         uci set adguardhome.config.enabled='1' 2>/dev/null
         /etc/init.d/adguardhome enable 2>/dev/null

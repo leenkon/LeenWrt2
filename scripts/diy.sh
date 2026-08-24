@@ -92,7 +92,7 @@ after)
 
     ip_esc=$(_escape_uci "$CUSTOM_IP")
 
-    # ===== FanchmWrt 分支：diy.sh 仅写 IP/WAN/主机名/flow_offloading；OC/ADGH/DNS_HIJACK 由 firstboot-pkgs 首启安装后布设（OAF 已废弃） =====
+    # FanchmWrt 分支：diy.sh 仅写 IP/WAN/主机名/flow_offloading；OC/ADGH/DNS_HIJACK 由 firstboot-pkgs 首启安装后布设
     case "$PROFILE_TYPE" in
       bypass) FB_PROFILE="mini" ;;
       *)      FB_PROFILE="default" ;;
@@ -164,6 +164,8 @@ uci set network.wan.username='$u'
 uci set network.wan.password='$p'
 uci set network.wan.ipv6='auto'
 uci set network.wan.peerdns='1'
+uci set network.wan.mtu_fix='1'
+uci set network.wan.mssfix='1'
 uci -q delete network.wan6
 EOT
 )

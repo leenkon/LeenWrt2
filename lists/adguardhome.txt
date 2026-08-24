@@ -1,4 +1,3 @@
 # AdGuardHome（可选：build.sh WITH_ADGH / workflow adguardhome=true 才首启安装并布 DNS 链）
-# 勾选后 dnsmasq 让出 :53 -> AdGuardHome :53；主路由额外 nftables dns-hijack 劫持 LAN :53
 luci-app-adguardhome
 adguardhome
