@@ -92,7 +92,7 @@ after)
 
     ip_esc=$(_escape_uci "$CUSTOM_IP")
 
-    # ===== FanchmWrt 精简分支（仅 IP/WAN/主机名；无 OC/ADGH/DNS_HIJACK/OAF） =====
+    # ===== FanchmWrt 分支：diy.sh 仅写 IP/WAN/主机名/flow_offloading；OC/ADGH/DNS_HIJACK 由 firstboot-pkgs 首启安装后布设（OAF 已废弃） =====
     case "$PROFILE_TYPE" in
       bypass) FB_PROFILE="mini" ;;
       *)      FB_PROFILE="default" ;;
