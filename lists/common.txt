@@ -10,11 +10,3 @@ udpxy
 luci-app-vlan
 openssl-util
 coreutils
-
-# AdGuardHome + OpenClash（用户态，首启在线安装；DNS 过滤链由 firstboot-pkgs 安装后布设）
-luci-app-adguardhome
-adguardhome
-luci-app-openclash
-openclash
-ruby
-ruby-yaml

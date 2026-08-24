@@ -1,0 +1,8 @@
+# AdGuardHome + OpenClash（可选：build.sh 勾选 / workflow oc_adgh=true 才首启安装并布 DNS 链）
+# DNS 过滤链: dnsmasq :5453 -> AdGuardHome :53 -> OpenClash :7874；主路由额外 nftables dns-hijack
+luci-app-adguardhome
+adguardhome
+luci-app-openclash
+openclash
+ruby
+ruby-yaml

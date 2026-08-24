@@ -63,6 +63,9 @@ install_all() {
 # 首启安装 OC/ADGH 后应用 DNS 过滤链（解决首启时序：uci schema 需包已装）
 apply_oc_adgh() {
     local prof="$1"
+    # 勾选门控：未勾选时 oc-adgh.txt 不会被拷入镜像，直接跳过（DNS 保持默认，不被劫持）
+    [ -f /etc/firstboot-pkgs/lists/oc-adgh.txt ] || return 0
+
     # apk add 可能覆盖 vendored 的 /etc 文件，故安装后再把 staging 写回真实路径
     if [ -d /etc/firstboot-pkgs/adgh ]; then
         cp -rf /etc/firstboot-pkgs/adgh/etc/* /etc/ 2>/dev/null
@@ -91,36 +94,39 @@ apply_oc_adgh() {
         logger -t firstboot-pkgs "AdGuardHome 已启用并启动"
     fi
 
-    # DNS 拓扑：dnsmasq 让出 :53 给 ADGH；OC 监听 :7874 为 ADGH 主上游
-    if [ "$prof" = "mini" ]; then
-        # 旁路由：dnsmasq :5453（DHCP ignore 由 99-custom 设置），ADGH :53，OC :7874；无 dns-hijack
-        uci -q set dhcp.@dnsmasq[0].port='5453'
-        uci -q set dhcp.@dnsmasq[0].rebind_protection='0'
-        uci -q set dhcp.@dnsmasq[0].dns_redirect='0'
-        uci -q delete dhcp.@dnsmasq[0].server
-        uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
-        uci add_list dhcp.@dnsmasq[0].server='223.6.6.6'
-        uci set dhcp.@dnsmasq[0].noresolv='1'
-        uci commit dhcp
-        logger -t firstboot-pkgs "旁路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53 -> OC :7874（无 dns-hijack）"
-    else
-        # 主路由：dnsmasq :5453，ADGH :53，OC :7874，dns-hijack 劫持 LAN :53 -> ADGH
-        uci -q set dhcp.@dnsmasq[0].port='5453'
-        uci -q delete dhcp.@dnsmasq[0].server
-        uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
-        uci add_list dhcp.@dnsmasq[0].server='223.6.6.6'
-        uci set dhcp.@dnsmasq[0].noresolv='1'
-        uci set dhcp.@dnsmasq[0].dns_redirect='0'
-        uci commit dhcp
-        if [ -x /usr/sbin/dns-hijack ]; then
-            chmod 755 /usr/sbin/dns-hijack
-            /usr/sbin/dns-hijack
-            uci -q delete firewall.dns_hijack_include
-            uci set firewall.dns_hijack_include=include
-            uci set firewall.dns_hijack_include.path='/usr/sbin/dns-hijack'
-            uci set firewall.dns_hijack_include.enabled='1'
-            uci commit firewall
-            logger -t firstboot-pkgs "主路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53 -> OC :7874 + dns-hijack"
+    # DNS 拓扑：仅当 OC/ADGH 实际装上才布链（避免未安装时劫持 DNS 致断网）
+    if [ -x /etc/init.d/adguardhome ] || [ -x /etc/init.d/openclash ]; then
+        # dnsmasq 让出 :53 给 ADGH；OC 监听 :7874 为 ADGH 主上游
+        if [ "$prof" = "mini" ]; then
+            # 旁路由：dnsmasq :5453（DHCP ignore 由 99-custom 设置），ADGH :53，OC :7874；无 dns-hijack
+            uci -q set dhcp.@dnsmasq[0].port='5453'
+            uci -q set dhcp.@dnsmasq[0].rebind_protection='0'
+            uci -q set dhcp.@dnsmasq[0].dns_redirect='0'
+            uci -q delete dhcp.@dnsmasq[0].server
+            uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
+            uci add_list dhcp.@dnsmasq[0].server='223.6.6.6'
+            uci set dhcp.@dnsmasq[0].noresolv='1'
+            uci commit dhcp
+            logger -t firstboot-pkgs "旁路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53 -> OC :7874（无 dns-hijack）"
+        else
+            # 主路由：dnsmasq :5453，ADGH :53，OC :7874，dns-hijack 劫持 LAN :53 -> ADGH
+            uci -q set dhcp.@dnsmasq[0].port='5453'
+            uci -q delete dhcp.@dnsmasq[0].server
+            uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
+            uci add_list dhcp.@dnsmasq[0].server='223.6.6.6'
+            uci set dhcp.@dnsmasq[0].noresolv='1'
+            uci set dhcp.@dnsmasq[0].dns_redirect='0'
+            uci commit dhcp
+            if [ -x /usr/sbin/dns-hijack ]; then
+                chmod 755 /usr/sbin/dns-hijack
+                /usr/sbin/dns-hijack
+                uci -q delete firewall.dns_hijack_include
+                uci set firewall.dns_hijack_include=include
+                uci set firewall.dns_hijack_include.path='/usr/sbin/dns-hijack'
+                uci set firewall.dns_hijack_include.enabled='1'
+                uci commit firewall
+                logger -t firstboot-pkgs "主路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53 -> OC :7874 + dns-hijack"
+            fi
         fi
     fi
 }
