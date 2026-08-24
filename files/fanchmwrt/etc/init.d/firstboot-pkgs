@@ -130,7 +130,7 @@ apply_dns_chain() {
             uci set dhcp.@dnsmasq[0].noresolv='1'
             uci set dhcp.@dnsmasq[0].dns_redirect='0'
             uci commit dhcp
-            # DNS 劫持开关：1=重定向 LAN :53 -> ADGH（默认）；0=drop LAN 出向 :53 强制回退 DHCP DNS
+            # DNS 劫持开关：1=重定向 LAN :53 -> ADGH（默认）；0=reject LAN 出向 :53 强制回退 DHCP DNS
             DNS_HIJACK=$(cat /etc/firstboot-pkgs/dns_hijack 2>/dev/null || echo 1)
             if [ "$DNS_HIJACK" = "1" ] && [ -x /usr/sbin/dns-hijack ]; then
                 chmod 755 /usr/sbin/dns-hijack
@@ -142,7 +142,7 @@ apply_dns_chain() {
                 uci commit firewall
                 logger -t firstboot-pkgs "主路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53$([ "$have_oc" = 1 ] && echo ' -> OC :7874') + dns-hijack"
             elif [ "$DNS_HIJACK" = "0" ]; then
-                # 不劫持：丢弃 LAN 出向 :53（udp/tcp），强迫写死公网 DNS 的设备回退到 DHCP 公告的路由器 DNS(ADGH)
+                # 不劫持：REJECT LAN 出向 :53（udp/tcp），立即回退到 DHCP 公告的路由器 DNS(ADGH)
                 for _z in wan wan6; do
                     uci -q get firewall.$_z >/dev/null 2>&1 || continue
                     uci -q delete firewall.drop_lan_dns_$_z
@@ -152,10 +152,10 @@ apply_dns_chain() {
                     uci set firewall.drop_lan_dns_$_z.dest="$_z"
                     uci set firewall.drop_lan_dns_$_z.dest_port='53'
                     uci set firewall.drop_lan_dns_$_z.proto='udp tcp'
-                    uci set firewall.drop_lan_dns_$_z.target='DROP'
+                    uci set firewall.drop_lan_dns_$_z.target='REJECT'
                 done
                 uci commit firewall
-                logger -t firstboot-pkgs "主路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53$([ "$have_oc" = 1 ] && echo ' -> OC :7874') + drop LAN 出向 :53"
+                logger -t firstboot-pkgs "主路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53$([ "$have_oc" = 1 ] && echo ' -> OC :7874') + reject LAN 出向 :53"
             fi
         fi
     elif [ "$have_oc" = "1" ]; then
