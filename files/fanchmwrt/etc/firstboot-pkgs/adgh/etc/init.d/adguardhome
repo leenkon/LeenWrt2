@@ -45,3 +45,10 @@ service_triggers() {
 		procd_add_raw_trigger 'interface.*.up' 5000 /etc/init.d/adguardhome restart
 	fi
 }
+
+# ADGH 停止/卸载时立即清除 DNS 劫持表，避免重定向到已不存在的 :53 致断网
+# （dns-hijack 仅在 firewall reload 时才探测，运行期卸载若不重启会残留旧规则；此处兜底）
+stop_service() {
+	nft delete table inet dns_hijack 2>/dev/null
+	logger -t adguardhome "已清除 dns_hijack 规则（回退 DHCP DNS）"
+}
