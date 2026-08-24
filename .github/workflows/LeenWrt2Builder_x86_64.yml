@@ -8,7 +8,7 @@ on:
       profile: {description: '配置 (Main=主路由 / Mini=旁路由)', required: true, type: choice, options: [Main, Mini], default: 'Main'}
       adguardhome: {description: '启用 AdGuardHome 广告过滤', required:  false, type: boolean, default: true}
       openclash: {description: '启用 OpenClash 代理', required: false, type: boolean, default: true}
-      dns_hijack: {description: '强制局域网 DNS 走 AdGuardHome（关则改回自动分配）', required: false, type: boolean, default: true}
+      dns_hijack: {description: '强制局域网 DNS 走 AdGuardHome（关则停用去广告并回退普通 DNS；若已卸载 ADGH 须关闭，否则会断网）', required: false, type: boolean, default: true}
       custom_ip: {description: '自定义IP', type: string, default: ''}
       custom_gateway: {description: '网关(旁路由)', type: string, default: ''}
       pppoe_username: {description: 'PPPoE账号(主路由)', type: string, default: ''}

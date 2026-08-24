@@ -1,10 +1,22 @@
 #!/bin/sh
 # 主路由 nftables DNS 劫持：把 LAN 客户端发往外部 :53 的查询重定向到本机 AdGuardHome(:53)
 # 旁路由 IP 始终排除，避免主路由 ADGH 挂掉时旁路由 DNS 被回环劫持而断网
+# 运行期自愈：若 ADGH 未运行(:53 无监听)，清空劫持规则并回退 DHCP DNS，避免全家断网
 nft delete table inet dns_hijack 2>/dev/null
 command -v nft >/dev/null 2>&1 || { logger -t dns-hijack "nft 不存在，跳过"; exit 0; }
 
-# 旁路由 IP：从 LAN 口 IP 推导（旁路由即同网段 .2，主路由 .1），排除其 DNS 不被劫持
+# 运行期探测：ADGH 是否在监听 :53（二进制在且进程存活），否则不劫持
+if [ ! -x /usr/bin/AdGuardHome ]; then
+    logger -t dns-hijack "AdGuardHome 未安装，跳过劫持（回退 DHCP DNS）"
+    exit 0
+fi
+if ! (command -v ss >/dev/null 2>&1 && ss -lun 2>/dev/null | grep -q ':53 ' \
+      || command -v netstat >/dev/null 2>&1 && netstat -lun 2>/dev/null | grep -q ':53 '); then
+    logger -t dns-hijack "AdGuardHome 未在监听 :53，跳过劫持（回退 DHCP DNS）"
+    exit 0
+fi
+
+# 旁路由 IP：从 LAN 口 IP 1 推导（旁路由即同网段 .2，主路由 .1），排除其 DNS 不被劫持
 BYPASS_IP=$(uci -q get network.lan.ipaddr 2>/dev/null | sed 's/\.[0-9]*$/.2/')
 
 nft add table inet dns_hijack
