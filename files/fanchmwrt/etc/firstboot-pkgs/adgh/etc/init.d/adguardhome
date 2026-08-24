@@ -36,6 +36,23 @@ start_service() {
 	procd_set_param stderr 1
 	procd_set_param respawn
 	procd_close_instance
+
+	# DNS 劫持生命周期绑定到 ADGH：仅当 ADGH 真正监听 :53 后才布劫持，
+	# 避免“装完即劫持”指向尚未就绪的 :53；stop_service 负责清表。
+	local dhijack
+	config_get_bool dhijack config dns_hijack 1
+	if [ "$dhijack" = "1" ] && [ -x /usr/sbin/dns-hijack ]; then
+		( local i
+		  for i in $(seq 1 20); do
+			if ss -lun 2>/dev/null | grep -q ':53 ' || netstat -lun 2>/dev/null | grep -q ':53 '; then
+				chmod 755 /usr/sbin/dns-hijack
+				/usr/sbin/dns-hijack
+				logger -t adguardhome "ADGH 已监听 :53，已布 DNS 劫持"
+				break
+			fi
+			sleep 1
+		  done ) &
+	fi
 }
 
 service_triggers() {
@@ -47,7 +64,7 @@ service_triggers() {
 }
 
 # ADGH 停止/卸载时立即清除 DNS 劫持表，避免重定向到已不存在的 :53 致断网
-# （dns-hijack 仅在 firewall reload 时才探测，运行期卸载若不重启会残留旧规则；此处兜底）
+# 劫持生命周期已绑定到本服务：start_service 在 ADGH 监听 :53 后才布，stop_service 负责清表
 stop_service() {
 	nft delete table inet dns_hijack 2>/dev/null
 	logger -t adguardhome "已清除 dns_hijack 规则（回退 DHCP DNS）"

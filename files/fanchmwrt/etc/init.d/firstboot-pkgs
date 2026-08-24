@@ -131,17 +131,11 @@ apply_dns_chain() {
             uci set dhcp.@dnsmasq[0].dns_redirect='0'
             uci commit dhcp
             # DNS 劫持开关：1=重定向 LAN :53 -> ADGH（默认）；0=reject LAN 出向 :53 强制回退 DHCP DNS
+            # 劫持偏好持久化到 uci，由 adguardhome 服务按生命周期布/清（ADGH 监听 :53 才劫持）
             DNS_HIJACK=$(cat /etc/firstboot-pkgs/dns_hijack 2>/dev/null || echo 1)
-            if [ "$DNS_HIJACK" = "1" ] && [ -x /usr/sbin/dns-hijack ]; then
-                chmod 755 /usr/sbin/dns-hijack
-                /usr/sbin/dns-hijack
-                uci -q delete firewall.dns_hijack_include
-                uci set firewall.dns_hijack_include=include
-                uci set firewall.dns_hijack_include.path='/usr/sbin/dns-hijack'
-                uci set firewall.dns_hijack_include.enabled='1'
-                uci commit firewall
-                logger -t firstboot-pkgs "主路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53$([ "$have_oc" = 1 ] && echo ' -> OC :7874') + dns-hijack"
-            elif [ "$DNS_HIJACK" = "0" ]; then
+            uci set adguardhome.config.dns_hijack="$DNS_HIJACK"
+            uci commit adguardhome
+            if [ "$DNS_HIJACK" = "0" ]; then
                 # 不劫持：REJECT LAN 出向 :53（udp/tcp），立即回退到 DHCP 公告的路由器 DNS(ADGH)
                 # 排除旁路由 IP（同网段 .2）：双路由部署下旁路由 dnsmasq 上游走公网 :53，源在 lan 区会被误杀
                 BYPASS_IP=$(uci -q get network.lan.ipaddr 2>/dev/null | sed 's/\.[0-9]*$/.2/')
@@ -159,6 +153,8 @@ apply_dns_chain() {
                 done
                 uci commit firewall
                 logger -t firstboot-pkgs "主路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53$([ "$have_oc" = 1 ] && echo ' -> OC :7874') + reject LAN 出向 :53"
+            else
+                logger -t firstboot-pkgs "主路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53$([ "$have_oc" = 1 ] && echo ' -> OC :7874')（劫持由 adguardhome 服务按生命周期布设）"
             fi
         fi
     elif [ "$have_oc" = "1" ]; then
