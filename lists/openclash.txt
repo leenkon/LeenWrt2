@@ -1,6 +1,0 @@
-# OpenClash（可选：build.sh WITH_OC / workflow openclash=true 才首启安装并布 DNS 链）
-# 依赖 ruby + ruby-yaml（LuCI YAML 解析，不可选）
-luci-app-openclash
-openclash
-ruby
-ruby-yaml

@@ -141,6 +141,17 @@ cd "$OPENWRT_DIR"
 # FanchmWrt：内联最小 .config（target+kmod+apk+fwx+镜像格式/分区，见 configs/fanchmwrt-lean.config），make defconfig 展开
 cat "$SCRIPT_DIR/configs/fanchmwrt-lean.config" > .config
 sed -i 's/\r$//' .config
+# ADGH/OC 编译进固件（二进制方式，按勾选；保留 lists 在线装其余包）
+if [ "$WITH_ADGH" = "1" ]; then
+  echo "CONFIG_PACKAGE_adguardhome=y" >> .config
+  echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
+fi
+if [ "$WITH_OC" = "1" ]; then
+  echo "CONFIG_PACKAGE_openclash=y" >> .config
+  echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
+  echo "CONFIG_PACKAGE_ruby=y" >> .config
+  echo "CONFIG_PACKAGE_ruby-yaml=y" >> .config
+fi
 echo "[build] FanchmWrt: 已写入最小 .config（configs/fanchmwrt-lean.config），make defconfig 将展开"
 
 # 用本项目定制 feature.cfg 覆盖 fwxd 自带应用特征库（同为 #format v3.0 应用特征库，可直接替换）
@@ -174,13 +185,6 @@ cp -f "$SCRIPT_DIR/apps/"*.apk "$OPENWRT_DIR/files/etc/firstboot-pkgs/apps/" 2>/
 mkdir -p "$OPENWRT_DIR/files/etc/firstboot-pkgs/lists"
 cp -f "$SCRIPT_DIR/lists/common.txt" "$OPENWRT_DIR/files/etc/firstboot-pkgs/lists/" 2>/dev/null || true
 cp -f "$SCRIPT_DIR/lists/default.txt" "$OPENWRT_DIR/files/etc/firstboot-pkgs/lists/" 2>/dev/null || true
-# ADGH/OC 分别仅在勾选时拷入首启安装目录（firstboot-pkgs 据列表存在与否门控 DNS 布链）
-if [ "$WITH_ADGH" = "1" ]; then
-  cp -f "$SCRIPT_DIR/lists/adguardhome.txt" "$OPENWRT_DIR/files/etc/firstboot-pkgs/lists/" 2>/dev/null || true
-fi
-if [ "$WITH_OC" = "1" ]; then
-  cp -f "$SCRIPT_DIR/lists/openclash.txt" "$OPENWRT_DIR/files/etc/firstboot-pkgs/lists/" 2>/dev/null || true
-fi
 # DNS 劫持开关标记（1=重定向 LAN :53 -> ADGH；0=REJECT LAN 出向 :53 强制回退 DHCP DNS）；firstboot-pkgs 读取
 echo "$WITH_DNS_HIJACK" > "$OPENWRT_DIR/files/etc/firstboot-pkgs/dns_hijack" 2>/dev/null || true
 

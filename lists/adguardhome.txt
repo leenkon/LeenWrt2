@@ -1,3 +1,0 @@
-# AdGuardHome（可选：build.sh WITH_ADGH / workflow adguardhome=true 才首启安装并布 DNS 链）
-luci-app-adguardhome
-adguardhome

@@ -77,13 +77,6 @@ before)
     [ -f "$FEED_CONF_SRC" ] || error_exit "缺失feed配置: $FEED_CONF_SRC"
     rm -f feeds.conf
     cp "$FEED_CONF_SRC" feeds.conf
-
-    # 修复 fwxd 联网误判：补丁优先 TCP 测公共 DNS :53，放宽超时
-    FWXD_PATCH="$PROJECT_ROOT/patches/fwxd-internet-check.patch"
-    if [ -f "$FWXD_PATCH" ] && [ -f package/fcm/fwxd/src/check_main.c ]; then
-        patch -p0 < "$FWXD_PATCH" >/dev/null 2>&1 && echo "[diy] 已应用 fwxd 联网检测补丁" \
-          || echo "[diy] 警告: fwxd 联网检测补丁应用失败（可能已打过或源码变更）"
-    fi
     ;;
 
 after)

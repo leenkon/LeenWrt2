@@ -74,6 +74,17 @@ jobs:
           # 写入最小 .config（configs/fanchmwrt-lean.config），defconfig 展开
           cp $GITHUB_WORKSPACE/configs/fanchmwrt-lean.config .config
           sed -i 's/\r$//' .config
+          # ADGH/OC 编译进固件（二进制方式，按勾选；保留 lists 在线装其余包）
+          if [ "${{ github.event.inputs.adguardhome }}" = "true" ]; then
+            echo "CONFIG_PACKAGE_adguardhome=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
+          fi
+          if [ "${{ github.event.inputs.openclash }}" = "true" ]; then
+            echo "CONFIG_PACKAGE_openclash=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
+            echo "CONFIG_PACKAGE_ruby=y" >> .config
+            echo "CONFIG_PACKAGE_ruby-yaml=y" >> .config
+          fi
           echo "[build] FanchmWrt: 已写入最小 .config，make defconfig 将展开"
 
           # 用定制 feature.cfg 覆盖 fwxd 应用特征库
@@ -101,15 +112,9 @@ jobs:
           mkdir -p files/etc/firstboot-pkgs/apps
           cp -f $GITHUB_WORKSPACE/apps/*.apk files/etc/firstboot-pkgs/apps/ 2>/dev/null || true
           mkdir -p files/etc/firstboot-pkgs/lists
-          # common/default 始终拷；adguardhome/openclash 仅在对应开关=true 时拷（门控 DNS 布链）
+          # common/default 始终拷（在线装其余包）；ADGH/OC 已编译进固件，不再经 lists 安装
           cp -f $GITHUB_WORKSPACE/lists/common.txt files/etc/firstboot-pkgs/lists/ 2>/dev/null || true
           cp -f $GITHUB_WORKSPACE/lists/default.txt files/etc/firstboot-pkgs/lists/ 2>/dev/null || true
-          if [ "${{ github.event.inputs.adguardhome }}" = "true" ]; then
-            cp -f $GITHUB_WORKSPACE/lists/adguardhome.txt files/etc/firstboot-pkgs/lists/ 2>/dev/null || true
-          fi
-          if [ "${{ github.event.inputs.openclash }}" = "true" ]; then
-            cp -f $GITHUB_WORKSPACE/lists/openclash.txt files/etc/firstboot-pkgs/lists/ 2>/dev/null || true
-          fi
           # DNS 劫持：1=重定向 :53，0=REJECT 出向（firstboot-pkgs 读取）
           if [ "${{ github.event.inputs.dns_hijack }}" = "true" ]; then
             echo "1" > files/etc/firstboot-pkgs/dns_hijack 2>/dev/null || true

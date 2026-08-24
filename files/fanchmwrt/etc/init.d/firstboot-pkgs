@@ -37,9 +37,10 @@ install_all() {
         # common 始终装；非 Mini 额外装 default.txt
         install_list /etc/firstboot-pkgs/lists/common.txt
         [ "$prof" != "mini" ] && install_list /etc/firstboot-pkgs/lists/default.txt
-        # 布链放此分支内：apk update 失败则绝不布链，避免无 ADGH 时断网
-        apply_dns_chain "$prof"
     fi
+
+    # ADGH/OC 已编译进固件（无需在线装），DNS 链不依赖 apk update 成败
+    apply_dns_chain "$prof"
 
     # 重启 Web 服务以加载新装的 luci-app-*
     [ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd restart 2>/dev/null
@@ -56,26 +57,17 @@ install_all() {
 #   ADGH   : dnsmasq :5453 -> ADGH :53（ADGH 上游可带 OC:7874 兜底）
 #   OC     : dnsmasq :53 -> OC :7874（redir-host）
 #   both   : dnsmasq :5453 -> ADGH :53 -> OC :7874
-# 门控依据：勾选列表才被拷入镜像首启目录
+# 门控依据：ADGH/OC 是否编译进固件（按 yml 勾选）
 apply_dns_chain() {
     local prof="$1"
     local have_adgh=0 have_oc=0
 
-    # 勾选门控：列表未拷入镜像即视为未勾选
-    [ -f /etc/firstboot-pkgs/lists/adguardhome.txt ] && have_adgh=1
-    [ -f /etc/firstboot-pkgs/lists/openclash.txt ]  && have_oc=1
+    # 门控依据：二进制是否已编译进固件
+    [ -x /usr/bin/AdGuardHome ] && have_adgh=1
+    [ -x /etc/init.d/openclash ] && have_oc=1
     [ "$have_adgh" = "0" ] && [ "$have_oc" = "0" ] && {
-        logger -t firstboot-pkgs "未勾选 ADGH/OC，DNS 保持默认（dnsmasq :53）"
+        logger -t firstboot-pkgs "未装 ADGH/OC，DNS 保持默认（dnsmasq :53）"
         return 0
-    }
-
-    # apk add 可能覆盖 vendored 文件，安装后写回真实路径
-    [ "$have_adgh" = "1" ] && [ -d /etc/firstboot-pkgs/adgh ] && {
-        cp -rf /etc/firstboot-pkgs/adgh/etc/* /etc/ 2>/dev/null
-        cp -rf /etc/firstboot-pkgs/adgh/usr/* /usr/ 2>/dev/null
-    }
-    [ "$have_oc" = "1" ] && [ -d /etc/firstboot-pkgs/openclash ] && {
-        cp -rf /etc/firstboot-pkgs/openclash/etc/* /etc/ 2>/dev/null
     }
 
     # OpenClash：Meta / redir-host，sniffer 由 custom_overwrite 开启
