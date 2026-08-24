@@ -45,8 +45,7 @@ jobs:
           source $GITHUB_WORKSPACE/cores/fanchmwrt.conf
           SRC_REF="fanchmwrt-${{ github.event.inputs.version }}"
           rm -rf openwrt
-          # 直接按 SRC_REF（分支）克隆检出，避免浅克隆 fetch 后无本地 ref 致 checkout 失败
-          # fwx 内核栈(kmod-fwx/fwxd) 仅 fanchmwrt-${VERSION} 分支有，所有 v25.12.x tag 均不含
+          # fwx 内核栈仅在 fanchmwrt 分支，按分支浅克隆
           timeout 180 git clone --depth 1 --single-branch --branch "$SRC_REF" "$REPO_URL" openwrt
 
       - name: 配置与编译
@@ -56,7 +55,7 @@ jobs:
           source $GITHUB_WORKSPACE/cores/fanchmwrt.conf
           FEEDS_FILE_ABS="$GITHUB_WORKSPACE/$FEEDS_FILE"
           FILES_DIR_ABS="$GITHUB_WORKSPACE/$FILES_DIR"
-          # 修复 Windows 提交可能带来的 CRLF（路由器 ash 不兼容），覆盖脚本/init.d
+          # 清除 Windows 提交引入的 CRLF（路由器 ash 不兼容）
           find $GITHUB_WORKSPACE -type f \( -name "*.sh" -o -name "*.yaml" -o -path "*/init.d/*" \) \
             -exec sed -i 's/\r$//' {} + 2>/dev/null || true
           cd openwrt
@@ -72,18 +71,18 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
 
-          # FanchmWrt：内联最小 .config（target+kmod+apk+fwx+镜像格式/分区，见 configs/fanchmwrt-lean.config），make defconfig 展开
+          # 写入最小 .config（configs/fanchmwrt-lean.config），defconfig 展开
           cp $GITHUB_WORKSPACE/configs/fanchmwrt-lean.config .config
           sed -i 's/\r$//' .config
-          echo "[build] FanchmWrt: 已写入最小 .config（configs/fanchmwrt-lean.config），make defconfig 将展开"
+          echo "[build] FanchmWrt: 已写入最小 .config，make defconfig 将展开"
 
-          # 用本项目定制 feature.cfg 覆盖 fwxd 自带应用特征库
+          # 用定制 feature.cfg 覆盖 fwxd 应用特征库
           FWXD_CFG="package/fcm/fwxd/files/feature.cfg"
           if [ -f "$GITHUB_WORKSPACE/appfilter-assets/feature.cfg" ] && [ -f "$FWXD_CFG" ]; then
             cp -f "$GITHUB_WORKSPACE/appfilter-assets/feature.cfg" "$FWXD_CFG"
-            echo "[build] FanchmWrt: 已用 appfilter-assets/feature.cfg 覆盖 fwxd 应用特征库 (-> /etc/fwxd/feature.cfg)"
+            echo "[build] FanchmWrt: 已覆盖 fwxd 应用特征库 (-> /etc/fwxd/feature.cfg)"
           elif [ -f "$GITHUB_WORKSPACE/appfilter-assets/feature.cfg" ]; then
-            echo "[build] 警告: 未找到 fwxd feature.cfg（package/fcm/fwxd/files/feature.cfg），跳过覆盖"
+            echo "[build] 警告: 未找到 fwxd feature.cfg，跳过覆盖"
           fi
 
           ROOTPWD="${{ github.event.inputs.root_password }}"; ROOTPWD="${ROOTPWD:-password}"
@@ -95,14 +94,14 @@ jobs:
             --root-pass "$ROOTPWD"
 
           [[ -d "$FILES_DIR_ABS" ]] && { rm -rf files; cp -rf "$FILES_DIR_ABS" files; } || true
-          # 共享静态文件层（如 cpufreq-perf）：覆盖到核专属 files 之上
+          # 共享静态文件层（如 cpufreq-perf）覆盖到核专属 files 之上
           [[ -d "$GITHUB_WORKSPACE/files/common" ]] && { cp -rf "$GITHUB_WORKSPACE/files/common/." files/; } || true
 
-          # 离线 .apk + 在线 lists：拷入镜像首启安装目录（由 firstboot-pkgs 安装）
+          # 离线 .apk + 在线 lists：拷入首启安装目录
           mkdir -p files/etc/firstboot-pkgs/apps
           cp -f $GITHUB_WORKSPACE/apps/*.apk files/etc/firstboot-pkgs/apps/ 2>/dev/null || true
           mkdir -p files/etc/firstboot-pkgs/lists
-          # common/default 始终拷；adguardhome/openclash 分别仅当对应输入=true 才拷（firstboot-pkgs 据列表存在与否门控 DNS 布链）
+          # common/default 始终拷；adguardhome/openclash 仅在对应开关=true 时拷（门控 DNS 布链）
           cp -f $GITHUB_WORKSPACE/lists/common.txt files/etc/firstboot-pkgs/lists/ 2>/dev/null || true
           cp -f $GITHUB_WORKSPACE/lists/default.txt files/etc/firstboot-pkgs/lists/ 2>/dev/null || true
           if [ "${{ github.event.inputs.adguardhome }}" = "true" ]; then
@@ -111,7 +110,7 @@ jobs:
           if [ "${{ github.event.inputs.openclash }}" = "true" ]; then
             cp -f $GITHUB_WORKSPACE/lists/openclash.txt files/etc/firstboot-pkgs/lists/ 2>/dev/null || true
           fi
-          # DNS 劫持开关标记（1=重定向；0=REJECT 出向 :53）；firstboot-pkgs 读取。false 输入写为 0
+          # DNS 劫持：1=重定向 :53，0=REJECT 出向（firstboot-pkgs 读取）
           if [ "${{ github.event.inputs.dns_hijack }}" = "true" ]; then
             echo "1" > files/etc/firstboot-pkgs/dns_hijack 2>/dev/null || true
           else
