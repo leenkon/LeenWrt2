@@ -143,12 +143,15 @@ apply_dns_chain() {
                 logger -t firstboot-pkgs "主路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53$([ "$have_oc" = 1 ] && echo ' -> OC :7874') + dns-hijack"
             elif [ "$DNS_HIJACK" = "0" ]; then
                 # 不劫持：REJECT LAN 出向 :53（udp/tcp），立即回退到 DHCP 公告的路由器 DNS(ADGH)
+                # 排除旁路由 IP（同网段 .2）：双路由部署下旁路由 dnsmasq 上游走公网 :53，源在 lan 区会被误杀
+                BYPASS_IP=$(uci -q get network.lan.ipaddr 2>/dev/null | sed 's/\.[0-9]*$/.2/')
                 for _z in wan wan6; do
                     uci -q get firewall.$_z >/dev/null 2>&1 || continue
                     uci -q delete firewall.drop_lan_dns_$_z
                     uci set firewall.drop_lan_dns_$_z=rule
-                    uci set firewall.drop_lan_dns_$_z.name="Drop LAN->$_z :53 (force router DNS)"
+                    uci set firewall.drop_lan_dns_$_z.name="Reject LAN->$_z :53 (force router DNS)"
                     uci set firewall.drop_lan_dns_$_z.src='lan'
+                    [ -n "$BYPASS_IP" ] && uci set firewall.drop_lan_dns_$_z.src_ip="!$BYPASS_IP"
                     uci set firewall.drop_lan_dns_$_z.dest="$_z"
                     uci set firewall.drop_lan_dns_$_z.dest_port='53'
                     uci set firewall.drop_lan_dns_$_z.proto='udp tcp'
