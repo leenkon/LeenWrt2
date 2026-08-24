@@ -77,12 +77,18 @@ case "$o" in [Nn]*) WITH_OC=0;; *) WITH_OC=1;; esac
 [ "$WITH_ADGH" = "1" ] && success "将安装 AdGuardHome" || success "不安装 AdGuardHome"
 [ "$WITH_OC" = "1" ] && success "将安装 OpenClash" || success "不安装 OpenClash"
 
+# DNS 劫持开关（仅主路由且装 ADGH 时生效）：开=重定向 LAN :53 -> ADGH；关=drop LAN 出向 :53 强制回退 DHCP DNS
+read -p "启用 DNS 劫持(重定向)? [Y/n，选 n 则 drop 出向 :53]: " h
+case "$h" in [Nn]*) WITH_DNS_HIJACK=0;; *) WITH_DNS_HIJACK=1;; esac
+[ "$WITH_DNS_HIJACK" = "1" ] && success "DNS 劫持(重定向)开启" || success "DNS 劫持关闭(改 drop 出向 :53)"
+
 # 确认
 echo -e "\n========================================  准备编译  ========================================"
 echo "  核心: $CORE | 版本: $VERSION | 配置: $PROFILE | IP: $ROUTER_IP | 类型: $RUN_TYPE"
 [[ -n "$GATEWAY_IP" ]] && echo "  网关: $GATEWAY_IP"
 [[ -n "$PPPOE_USER" ]] && echo "  PPPoE: $PPPOE_USER"
 echo "  ADGH/OC: ADGH=$([ "$WITH_ADGH" = 1 ] && echo 安装 || echo 不安装) / OC=$([ "$WITH_OC" = 1 ] && echo 安装 || echo 不安装)"
+echo "  DNS 劫持: $([ "$WITH_DNS_HIJACK" = 1 ] && echo 重定向 || echo drop出向53)"
 echo "==================================================================================="
 read -p "确认开始? [Y/n]: " c; [[ "$c" =~ ^[Nn]$ ]] && exit 0
 
@@ -175,6 +181,8 @@ fi
 if [ "$WITH_OC" = "1" ]; then
   cp -f "$SCRIPT_DIR/lists/openclash.txt" "$OPENWRT_DIR/files/etc/firstboot-pkgs/lists/" 2>/dev/null || true
 fi
+# DNS 劫持开关标记（1=重定向 LAN :53 -> ADGH；0=drop LAN 出向 :53 强制回退 DHCP DNS）；firstboot-pkgs 读取
+echo "$WITH_DNS_HIJACK" > "$OPENWRT_DIR/files/etc/firstboot-pkgs/dns_hijack" 2>/dev/null || true
 
 # 确保脚本可执行（Windows 无 Unix x 位，按路径/扩展名匹配）
 find "$OPENWRT_DIR/files" -type f \( -path "*/sbin/*" -o -path "*/init.d/*" -o -path "*/hotplug.d/*" -o -path "*/uci-defaults/*" -o -name "*.sh" \) -exec chmod 755 {} + 2>/dev/null || true
