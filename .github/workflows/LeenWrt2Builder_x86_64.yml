@@ -6,9 +6,9 @@ on:
     inputs:
       version: {description: '版本 (fanchmwrt 分支: 25.12.4 / 25.12.2)', required: true, type: string, default: '25.12.4'}
       profile: {description: '配置 (Main=主路由 / Mini=旁路由)', required: true, type: choice, options: [Main, Mini], default: 'Main'}
-      adguardhome: {description: '安装 AdGuardHome 并布 DNS 链', required: false, type: boolean, default: true}
-      openclash: {description: '安装 OpenClash 并布 DNS 链', required: false, type: boolean, default: true}
-      dns_hijack: {description: 'DNS 劫持(重定向 LAN :53 -> ADGH)；false 则 REJECT LAN 出向 :53 强制回退 DHCP DNS', required: false, type: boolean, default: true}
+      adguardhome: {description: '启用 AdGuardHome 广告过滤', required:  false, type: boolean, default: true}
+      openclash: {description: '启用 OpenClash 代理', required: false, type: boolean, default: true}
+      dns_hijack: {description: '强制局域网 DNS 走 AdGuardHome（关则改回自动分配）', required: false, type: boolean, default: true}
       custom_ip: {description: '自定义IP', type: string, default: ''}
       custom_gateway: {description: '网关(旁路由)', type: string, default: ''}
       pppoe_username: {description: 'PPPoE账号(主路由)', type: string, default: ''}
