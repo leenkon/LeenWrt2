@@ -176,9 +176,15 @@ apply_dns_chain() {
 
 wait_net() {
     # 等待到公网可达（不依赖具体接口，旁路由无 wan 也能靠网关路由出去）
+    # 不只看 ICMP：部分网络丢弃 ping 但 TCP/HTTPS 通，故以 ping 或 HTTPS 可达任一为真
     local i=0
     while [ $i -lt 30 ]; do
         if ping -c1 -W2 223.5.5.5 >/dev/null 2>&1; then
+            return 0
+        fi
+        # HTTPS 真实可达性探测（避免 ICMP 被丢弃误判断网）
+        if wget -T 4 -q -O /dev/null https://connectivitycheck.gstatic.com/generate_204 2>/dev/null \
+           || wget -T 4 -q -O /dev/null https://www.qualcomm.com/ 2>/dev/null; then
             return 0
         fi
         i=$((i + 1))
