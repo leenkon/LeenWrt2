@@ -45,10 +45,10 @@ install_all() {
         # common 始终安装；Mini 档无专属包（仅 common），Main 档额外安装 default.txt
         install_list /etc/firstboot-pkgs/lists/common.txt
         [ "$prof" != "mini" ] && install_list /etc/firstboot-pkgs/lists/default.txt
+        # OC/ADGH 首启布链：必须在在线安装成功（包已装上）之后执行；
+        # 放此分支内，确保 apk update 失败时绝不布链（避免无 ADGH 时 dns-hijack 致 DNS 全断）
+        apply_oc_adgh "$prof"
     fi
-
-    # OC/ADGH 首启布链：必须在 apk 安装之后（uci schema 才就绪），且在本服务自清理前（staging 仍在）
-    apply_oc_adgh "$prof"
 
     # 安装完成后刷新 Web 后台，加载新装的 luci-app-* 模块（uhttpd 需 restart 才能识别）
     [ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd restart 2>/dev/null
@@ -94,8 +94,9 @@ apply_oc_adgh() {
         logger -t firstboot-pkgs "AdGuardHome 已启用并启动"
     fi
 
-    # DNS 拓扑：仅当 OC/ADGH 实际装上才布链（避免未安装时劫持 DNS 致断网）
-    if [ -x /etc/init.d/adguardhome ] || [ -x /etc/init.d/openclash ]; then
+    # DNS 拓扑：仅当 AdGuardHome 真实装上（/usr/bin/AdGuardHome 存在）才布链；
+    # 否则保持 dnsmasq :53 默认，避免劫持 DNS 致断网
+    if [ -x /usr/bin/AdGuardHome ]; then
         # dnsmasq 让出 :53 给 ADGH；OC 监听 :7874 为 ADGH 主上游
         if [ "$prof" = "mini" ]; then
             # 旁路由：dnsmasq :5453（DHCP ignore 由 99-custom 设置），ADGH :53，OC :7874；无 dns-hijack
@@ -128,6 +129,8 @@ apply_oc_adgh() {
                 logger -t firstboot-pkgs "主路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53 -> OC :7874 + dns-hijack"
             fi
         fi
+    else
+        logger -t firstboot-pkgs "AdGuardHome 未安装，跳过 DNS 拓扑布链（保持 dnsmasq :53 默认）"
     fi
 }
 
