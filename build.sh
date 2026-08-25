@@ -69,13 +69,13 @@ read -p "Root密码 [默认: password]: " rp
 ROOT_PWD="${rp:-$ROOT_PASSWORD}"
 success "密码已设置"
 
-# AdGuardHome / OpenClash（可独立勾选：勾选才首启安装并布 DNS 链）
+# AdGuardHome / OpenClash（可独立勾选：勾选才编译进固件并布 DNS 链）
 read -p "安装 AdGuardHome? [Y/n]: " a
 case "$a" in [Nn]*) WITH_ADGH=0;; *) WITH_ADGH=1;; esac
 read -p "安装 OpenClash? [Y/n]: " o
 case "$o" in [Nn]*) WITH_OC=0;; *) WITH_OC=1;; esac
-[ "$WITH_ADGH" = "1" ] && success "将安装 AdGuardHome" || success "不安装 AdGuardHome"
-[ "$WITH_OC" = "1" ] && success "将安装 OpenClash" || success "不安装 OpenClash"
+[ "$WITH_ADGH" = "1" ] && success "将编译进固件: AdGuardHome" || success "不编译 AdGuardHome"
+[ "$WITH_OC" = "1" ] && success "将编译进固件: OpenClash" || success "不编译 OpenClash"
 
 # DNS 劫持开关（仅主路由且装 ADGH 时生效）：开=重定向 LAN :53 -> ADGH；关=REJECT LAN 出向 :53 强制回退 DHCP DNS
 read -p "启用 DNS 劫持(重定向)? [Y/n，选 n 则 reject 出向 :53]: " h
@@ -87,7 +87,7 @@ echo -e "\n========================================  准备编译  =============
 echo "  核心: $CORE | 版本: $VERSION | 配置: $PROFILE | IP: $ROUTER_IP | 类型: $RUN_TYPE"
 [[ -n "$GATEWAY_IP" ]] && echo "  网关: $GATEWAY_IP"
 [[ -n "$PPPOE_USER" ]] && echo "  PPPoE: $PPPOE_USER"
-echo "  ADGH/OC: ADGH=$([ "$WITH_ADGH" = 1 ] && echo 安装 || echo 不安装) / OC=$([ "$WITH_OC" = 1 ] && echo 安装 || echo 不安装)"
+echo "  ADGH/OC: ADGH=$([ "$WITH_ADGH" = 1 ] && echo 编译 || echo 不编译) / OC=$([ "$WITH_OC" = 1 ] && echo 编译 || echo 不编译)"
 echo "  DNS 劫持: $([ "$WITH_DNS_HIJACK" = 1 ] && echo 重定向 || echo REJECT出向53)"
 echo "==================================================================================="
 read -p "确认开始? [Y/n]: " c; [[ "$c" =~ ^[Nn]$ ]] && exit 0
