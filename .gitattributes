@@ -8,3 +8,4 @@
 files/fanchmwrt/usr/sbin/dns-hijack text eol=lf
 files/fanchmwrt/etc/hotplug.d/iface/99-adgh-filters text eol=lf
 files/fanchmwrt/usr/share/ucode/luci/template/themes/fanchmwrt/footer.ut text eol=lf
+files/fanchmwrt/usr/share/ucode/luci/template/themes/bootstrap/footer.ut text eol=lf
