@@ -1,0 +1,7 @@
+		{% if (!blank_page): %}
+			</div>
+		</div>
+		<script>L.require('menu-fanchmwrt')</script>
+		{% endif %}
+	</body>
+</html>
