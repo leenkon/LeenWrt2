@@ -24,7 +24,7 @@ DNS_MAIN="223.5.5.5"
 DNS_BACKUP="223.6.6.6"
 
 VERSION="" PHASE="" PROFILE_TYPE="" CORE="fanchmwrt" FEEDS_SRC="" FILES_DIR_NAME="files"
-CUSTOM_IP="" CUSTOM_GATEWAY="" PPPOE_USERNAME="" PPPOE_PASSWORD="" ROOT_PASSWORD=""
+CUSTOM_IP="" CUSTOM_GATEWAY="" BYPASS_IP="" PPPOE_USERNAME="" PPPOE_PASSWORD="" ROOT_PASSWORD=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -39,6 +39,7 @@ while [ $# -gt 0 ]; do
         --core)      CORE="$2"; shift 2 ;;
         --feeds)     FEEDS_SRC="$2"; shift 2 ;;
         --files-dir) FILES_DIR_NAME="$2"; shift 2 ;;
+        --bypass-ip) BYPASS_IP="$2"; shift 2 ;;
         *) error_exit "未知参数 $1" ;;
     esac
 done
@@ -79,6 +80,22 @@ before)
     cp "$FEED_CONF_SRC" feeds.conf
     ;;
 
+ruby)
+    # ruby YJIT 解耦：分支头 lang/ruby 默认 RUBY_ENABLE_YJIT=y -> 拉 rust/host -> rustc LLVM 404 构建挂。
+    # OpenClash 依赖 ruby(不可选)，故仅在 WITH_OC 时由 build.sh/workflow 调用。须 feeds update 后、install 前执行。
+    echo "[diy] ruby: 解耦 YJIT 与 rust/host（x86_64/aarch64）"
+    RUBY_DIR="$PROJECT_ROOT/openwrt/feeds/packages/lang/ruby"
+    if [ -d "$RUBY_DIR" ]; then
+        # Makefile: 去掉 RUBY_ENABLE_YJIT:rust/host 条件依赖，仅保留 ruby/host（用 # 作分隔符避路径斜杠）
+        sed -i -E 's#(PKG_BUILD_DEPENDS:=ruby/host) RUBY_ENABLE_YJIT:rust/host#\1#' "$RUBY_DIR/Makefile"
+        # Config.in: 删除 x86_64/aarch64 默认开启 YJIT（让 defconfig 不再翻成 =y）
+        sed -i -E '/^[[:space:]]*default y if x86_64\|\|aarch64[[:space:]]*$/d' "$RUBY_DIR/Makefile"
+        echo "[diy] ruby: 已解耦 YJIT（Makefile 依赖 + Config.in default 均清除）"
+    else
+        echo "[diy] WARN: 未找到 $RUBY_DIR（feeds update 是否已执行？），跳过 ruby YJIT 解耦" >&2
+    fi
+    ;;
+
 after)
     echo "[diy] after: $PROFILE_TYPE (core=$CORE)"
     case "$FILES_DIR_NAME" in
@@ -99,9 +116,23 @@ after)
     esac
     mkdir -p "$FB_DIR/etc/firstboot-pkgs"
     echo "$FB_PROFILE" > "$FB_DIR/etc/firstboot-pkgs/profile"
+    # 双路由主路由：写入对端旁路由 IP，供 firstboot-pkgs 布 dns_hijack_bypass_ip（dns-hijack 据此排除，防二次劫持）；单路由/旁路由留空=全量劫持
+    [ -n "$BYPASS_IP" ] && echo "$BYPASS_IP" > "$FB_DIR/etc/firstboot-pkgs/bypass_ip"
 
     echo '#!/bin/sh' > "$OUT"
     echo "logger -t uci-defaults \"开始应用 LeenWrt ${PROFILE_TYPE} 配置\"" >> "$OUT"
+
+    # 确保 loopback 接口存在：overlay/rootfs 挂载异常时默认配置可能缺失，导致 lo 未 UP、127.0.0.1 不可达，
+    # 进而 ADGH/OC/dnsmasq/LuCI 全挂。放开头供 main/bypass 共用。
+    cat >> "$OUT" <<'EOF'
+if ! uci -q get network.loopback >/dev/null 2>&1; then
+    uci set network.loopback=interface
+    uci set network.loopback.device='lo'
+    uci set network.loopback.proto='static'
+    uci set network.loopback.ipaddr='127.0.0.1'
+    uci set network.loopback.netmask='255.0.0.0'
+fi
+EOF
 
     # x86 网口翻转：源码默认末口=WAN，翻为首口=WAN（其余桥接 LAN）；旁路由下方单独全桥接 LAN
     _SRC_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../openwrt" 2>/dev/null && pwd || true)"
@@ -230,7 +261,7 @@ EOT
     chmod 755 "$OUT" 2>/dev/null || true
     echo "[diy] 输出: $OUT (FanchmWrt lean)"
     ;;
-*) error_exit "PHASE仅支持 before / after" ;;
+*) error_exit "PHASE仅支持 before / after / ruby" ;;
 esac
 
 echo "[diy] done: $PHASE ${PROFILE_TYPE:-N/A}"

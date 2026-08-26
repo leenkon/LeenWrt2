@@ -60,6 +60,10 @@ success "LAN IP: $ROUTER_IP"
 GATEWAY_IP=""
 [[ "$RUN_TYPE" == "bypass" ]] && { read -p "网关IP [默认: $DEF_GATEWAY]: " gw; GATEWAY_IP="${gw:-$DEF_GATEWAY}"; success "网关: $GATEWAY_IP"; }
 
+# 旁路由IP(仅主路由)：双路由填写对端旁路由 IP，供 DNS 劫持排除(防二次劫持)；单路由留空=全量劫持
+BYPASS_PEER_IP=""
+[[ "$RUN_TYPE" == "main" ]] && { read -p "旁路由IP(双路由填写，留空=单路由全量劫持) [默认空]: " bip; BYPASS_PEER_IP="${bip:-}"; success "旁路由IP: ${BYPASS_PEER_IP:-空(单路由)}"; }
+
 # PPPoE (主路由)
 PPPOE_USER="" PPPOE_PASS=""
 [[ "$RUN_TYPE" == "main" ]] && { read -p "配置PPPoE? [y/N]: " pp; [[ "$pp" =~ ^[Yy]$ ]] && { read -p "用户名: " PPPOE_USER; read -p "密码: " PPPOE_PASS; success "PPPoE已配置"; } || success "使用DHCP"; }
@@ -74,8 +78,8 @@ read -p "安装 AdGuardHome? [Y/n]: " a
 case "$a" in [Nn]*) WITH_ADGH=0;; *) WITH_ADGH=1;; esac
 read -p "安装 OpenClash? [Y/n]: " o
 case "$o" in [Nn]*) WITH_OC=0;; *) WITH_OC=1;; esac
-[ "$WITH_ADGH" = "1" ] && success "将编译进固件: AdGuardHome" || success "不编译 AdGuardHome"
-[ "$WITH_OC" = "1" ] && success "将编译进固件: OpenClash" || success "不编译 OpenClash"
+[ "$WITH_ADGH" = "1" ] && success "将装入固件(二进制注入): AdGuardHome" || success "不装入 AdGuardHome"
+[ "$WITH_OC" = "1" ] && success "将装入固件(核心预装+LuCI编译): OpenClash" || success "不装入 OpenClash"
 
 # DNS 劫持开关（仅主路由且装 ADGH 时生效）：开=重定向 LAN :53 -> ADGH；关=REJECT LAN 出向 :53 强制回退 DHCP DNS
 read -p "启用 DNS 劫持(重定向)? [Y/n，选 n 则 reject 出向 :53]: " h
@@ -87,7 +91,7 @@ echo -e "\n========================================  准备编译  =============
 echo "  核心: $CORE | 版本: $VERSION | 配置: $PROFILE | IP: $ROUTER_IP | 类型: $RUN_TYPE"
 [[ -n "$GATEWAY_IP" ]] && echo "  网关: $GATEWAY_IP"
 [[ -n "$PPPOE_USER" ]] && echo "  PPPoE: $PPPOE_USER"
-echo "  ADGH/OC: ADGH=$([ "$WITH_ADGH" = 1 ] && echo 编译 || echo 不编译) / OC=$([ "$WITH_OC" = 1 ] && echo 编译 || echo 不编译)"
+echo "  ADGH/OC: ADGH=$([ "$WITH_ADGH" = 1 ] && echo 装入 || echo 不装入) / OC=$([ "$WITH_OC" = 1 ] && echo 装入 || echo 不装入)"
 echo "  DNS 劫持: $([ "$WITH_DNS_HIJACK" = 1 ] && echo 重定向 || echo REJECT出向53)"
 echo "==================================================================================="
 read -p "确认开始? [Y/n]: " c; [[ "$c" =~ ^[Nn]$ ]] && exit 0
@@ -103,7 +107,7 @@ echo -e "\n${YELLOW}[1/7] 检查换行符和权限...${NC}"
 find "$SCRIPT_DIR/scripts" "$SCRIPT_DIR/$FILES_DIR" "$SCRIPT_DIR/files/common" -type f \
   \( -name "*.sh" -o -name "*.yaml" -o -path "*/init.d/*" \) \
   -exec sed -i 's/\r$//' {} + 2>/dev/null || true
-chmod +x "$DIY"
+chmod +x "$DIY" "$SCRIPT_DIR/scripts/upgrade-adgh-binary.sh" "$SCRIPT_DIR/scripts/upgrade-openclash.sh"
 success "完成"
 
 # 2. 依赖
@@ -136,23 +140,50 @@ echo -e "\n${YELLOW}[4/7] 准备配置...${NC}"
 cd "$OPENWRT_DIR"
 "$DIY" -v "${VERSION%.*}" -p before -t "$RUN_TYPE" --core "$CORE" --feeds "$FEEDS_FILE_ABS"
 ./scripts/feeds update -a
+
+# ruby YJIT 解耦（仅 WITH_OC 时）：分支头 lang/ruby 默认拉 rust/host 致构建失败，须 install 前执行
+if [ "$WITH_OC" = "1" ]; then
+  "$SCRIPT_DIR/scripts/diy.sh" -v "${VERSION%.*}" -p ruby -t "$RUN_TYPE" --core "$CORE"
+fi
+
+# OpenClash LuCI 替换官方仓库（WITH_OC 时）：feeds update 后、install 前执行
+if [ "$WITH_OC" = "1" ]; then
+  "$SCRIPT_DIR/scripts/upgrade-openclash.sh" luci "$OPENWRT_DIR"
+fi
+
+# AdGuardHome：去除 luci-app 对引擎包(adguardhome)硬依赖，引擎走二进制注入（25.12）
+if [ "${VERSION%.*}" = "25.12" ]; then
+  ADGH_LUCI_MK="$OPENWRT_DIR/feeds/luci/applications/luci-app-adguardhome/Makefile"
+  if [ -f "$ADGH_LUCI_MK" ]; then
+    sed -i -e 's/+adguardhome //g' -e '/LUCI_EXTRA_DEPENDS:=adguardhome/d' "$ADGH_LUCI_MK"
+    echo "[build] 已去除 luci-app-adguardhome 对 adguardhome 引擎的硬依赖（引擎走二进制注入）"
+  else
+    echo "[build] 警告: 未找到 luci-app-adguardhome Makefile，跳过依赖去除"
+  fi
+fi
+
 ./scripts/feeds install -a -f
 
 # FanchmWrt：内联最小 .config（target+kmod+apk+fwx+镜像格式/分区，见 configs/fanchmwrt-lean.config），make defconfig 展开
 cat "$SCRIPT_DIR/configs/fanchmwrt-lean.config" > .config
 sed -i 's/\r$//' .config
-# ADGH/OC 编译进固件（二进制方式，按勾选；保留 lists 在线装其余包）
-if [ "$WITH_ADGH" = "1" ]; then
-  echo "CONFIG_PACKAGE_adguardhome=y" >> .config
-  echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
-fi
-if [ "$WITH_OC" = "1" ]; then
-  echo "CONFIG_PACKAGE_openclash=y" >> .config
-  echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
-  echo "CONFIG_PACKAGE_ruby=y" >> .config
-  echo "CONFIG_PACKAGE_ruby-yaml=y" >> .config
-fi
-echo "[build] FanchmWrt: 已写入最小 .config（configs/fanchmwrt-lean.config），make defconfig 将展开"
+# ADGH/OC 选装包：勾选时注入 CONFIG_PACKAGE_*（清单单一来源：configs/{adgh,oc}-packages.list）
+# 引擎不编译：AdGuardHome 走 upgrade-adgh-binary.sh 注入二进制；OpenClash 核心走 upgrade-openclash.sh core 预装
+_inject_pkg_list() {
+  local _list="$1" _label="$2"
+  [ -f "$_list" ] || return 0
+  {
+    echo ""
+    echo "# ===== $_label ====="
+    while read -r _pkg; do
+      [ -n "$_pkg" ] && [ "$_pkg" != \#* ] && echo "CONFIG_PACKAGE_${_pkg}=y"
+    done < "$_list"
+  } >> .config
+  echo "[build] 已追加 $_label（来自 $_list）"
+}
+[ "$WITH_OC" = "1" ] && _inject_pkg_list "$SCRIPT_DIR/configs/oc-packages.list" "OpenClash 选装包"
+[ "$WITH_ADGH" = "1" ] && _inject_pkg_list "$SCRIPT_DIR/configs/adgh-packages.list" "AdGuardHome 选装包"
+echo "[build] FanchmWrt: 已写入最小 .config（configs/fanchmwrt-lean.config）+ ADGH/OC 选装包，make defconfig 将展开"
 
 # 用本项目定制 feature.cfg 覆盖 fwxd 自带应用特征库（同为 #format v3.0 应用特征库，可直接替换）
 FWXD_CFG="$OPENWRT_DIR/package/fcm/fwxd/files/feature.cfg"
@@ -169,15 +200,49 @@ echo -e "\n${YELLOW}[5/7] 生成网络配置...${NC}"
 "$DIY" -v "${VERSION%.*}" -p after -t "$RUN_TYPE" --core "$CORE" --files-dir "$FILES_DIR_ABS" \
   ${ROUTER_IP:+--ip "$ROUTER_IP"} \
   ${GATEWAY_IP:+--gateway "$GATEWAY_IP"} \
+  ${BYPASS_PEER_IP:+--bypass-ip "$BYPASS_PEER_IP"} \
   ${PPPOE_USER:+--pppoe-user "$PPPOE_USER"} ${PPPOE_PASS:+--pppoe-pass "$PPPOE_PASS"} \
   --root-pass "$ROOT_PWD"
 success "完成"
 
 # 6. 预装核心 + 打包 files
 echo -e "\n${YELLOW}[6/7] 预装核心与打包文件...${NC}"
+# OpenClash Meta 核心预装（WITH_OC 时）：注入 files/etc/openclash/core/clash_meta，跳过首启下载
+if [ "$WITH_OC" = "1" ]; then
+  "$SCRIPT_DIR/scripts/upgrade-openclash.sh" core "$SCRIPT_DIR" --files-dir "$FILES_DIR_ABS"
+fi
+# AdGuardHome 官方预编译二进制注入（WITH_ADGH 时）：注入 files/usr/bin/AdGuardHome；未勾选不注入
+if [ "$WITH_ADGH" = "1" ]; then
+  "$SCRIPT_DIR/scripts/upgrade-adgh-binary.sh" "$SCRIPT_DIR" --files-dir "$FILES_DIR_ABS"
+fi
 [[ -d "$FILES_DIR_ABS" ]] && { rm -rf "$OPENWRT_DIR/files"; cp -rf "$FILES_DIR_ABS" "$OPENWRT_DIR/files"; }
 # 共享静态文件层（如 cpufreq-perf）：覆盖到核专属 files 之上
 [[ -d "$SCRIPT_DIR/files/common" ]] && { cp -rf "$SCRIPT_DIR/files/common/." "$OPENWRT_DIR/files/"; }
+
+# 文件清理：按勾选删除不需要的静态文件（在 openwrt 副本上操作，不修改源树）
+case "$RUN_TYPE" in
+  bypass)
+    # 新拓扑：旁路由与主路由同走 dnsmasq :53 兜底 + ADGH :5353 + 重定向，dns-hijack 保留
+    ;;
+  main)
+    # 未勾选 AdGuardHome：清理 ADGH 静态文件（引擎二进制由 upgrade 脚本注入，未勾选则不注入）
+    if [ "$WITH_ADGH" = "0" ]; then
+      rm -rf "$OPENWRT_DIR/files/etc/adguardhome"
+      rm -f "$OPENWRT_DIR/files/usr/bin/AdGuardHome"
+      rm -f "$OPENWRT_DIR/files/etc/init.d/adguardhome"
+      rm -f "$OPENWRT_DIR/files/etc/config/adguardhome"
+      rm -f "$OPENWRT_DIR/files/etc/hotplug.d/iface/99-adgh-filters"
+    fi
+    # 未装 ADGH 或关闭劫持(改用 REJECT)：dns-hijack 脚本不再使用
+    if [ "$WITH_ADGH" = "0" ] || [ "$WITH_DNS_HIJACK" = "0" ]; then
+      rm -f "$OPENWRT_DIR/files/usr/sbin/dns-hijack"
+    fi
+    # 未勾选 OpenClash：清理 OC 静态文件
+    if [ "$WITH_OC" = "0" ]; then
+      rm -rf "$OPENWRT_DIR/files/etc/openclash"
+    fi
+    ;;
+esac
 
 # 离线 .apk + 在线 lists：拷入镜像首启安装目录（由 firstboot-pkgs 用 --allow-untrusted 安装）
 mkdir -p "$OPENWRT_DIR/files/etc/firstboot-pkgs/apps"

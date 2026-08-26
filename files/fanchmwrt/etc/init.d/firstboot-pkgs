@@ -52,11 +52,10 @@ install_all() {
     rm -rf /etc/firstboot-pkgs
 }
 
-# 首启布 DNS 链（包已装才执行）。四种拓扑：
-#   neither: dnsmasq :53 默认直连公网 DNS
-#   ADGH   : dnsmasq :5453 -> ADGH :53（ADGH 上游可带 OC:7874 兜底）
-#   OC     : dnsmasq :53 -> OC :7874（redir-host）
-#   both   : dnsmasq :5453 -> ADGH :53 -> OC :7874
+# 首启布 DNS 链（包已装才执行）。新拓扑（零抖动）：
+#   dnsmasq 常驻 :53 兜底；ADGH 占 :5353；nft 重定向 LAN :53 -> :5353 过滤。
+#   ADGH 宕：清劫持表、LAN 直落 dnsmasq :53 不掉网。
+#   OC：dnsmasq 上游指向 OC :7874 + 公有 DNS 兜底。
 # 门控依据：ADGH/OC 是否编译进固件（按 yml 勾选）
 apply_dns_chain() {
     local prof="$1"
@@ -94,55 +93,49 @@ apply_dns_chain() {
 
     # 仅当 ADGH 真实装上（/usr/bin/AdGuardHome 存在）才布链，否则保持 dnsmasq :53 默认
     if [ -x /usr/bin/AdGuardHome ]; then
-        if [ "$prof" = "mini" ]; then
-            # 旁路由：dnsmasq :5453 -> ADGH :53（无 dns-hijack）
-            uci -q set dhcp.@dnsmasq[0].port='5453'
-            uci -q set dhcp.@dnsmasq[0].rebind_protection='0'
-            uci -q set dhcp.@dnsmasq[0].dns_redirect='0'
-            uci -q delete dhcp.@dnsmasq[0].server
-            uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
-            uci add_list dhcp.@dnsmasq[0].server='223.6.6.6'
-            uci set dhcp.@dnsmasq[0].noresolv='1'
-            uci commit dhcp
-            logger -t firstboot-pkgs "旁路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53$([ "$have_oc" = 1 ] && echo ' -> OC :7874')（无 dns-hijack）"
+        # dnsmasq 常驻 :53 兜底（不抢端口），上游指向公有 DNS（ADGH 宕时直连）
+        uci -q delete dhcp.@dnsmasq[0].port
+        uci -q delete dhcp.@dnsmasq[0].server
+        uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
+        uci add_list dhcp.@dnsmasq[0].server='223.6.6.6'
+        uci set dhcp.@dnsmasq[0].noresolv='1'
+        uci set dhcp.@dnsmasq[0].rebind_protection='0'
+        uci set dhcp.@dnsmasq[0].dns_redirect='0'
+        uci commit dhcp
+
+        # 劫持开关持久化到 uci，由 adguardhome 服务按生命周期布/清（重定向 :53 -> :5353）
+        DNS_HIJACK=$(cat /etc/firstboot-pkgs/dns_hijack 2>/dev/null || echo 1)
+        uci set adguardhome.config.dns_hijack="$DNS_HIJACK"
+        # 双路由主路由：填对端旁路由 IP，供 dns-hijack 排除防二次劫持；单路由/旁路由留空=全量劫持
+        BYPASS_IP=$(cat /etc/firstboot-pkgs/bypass_ip 2>/dev/null)
+        [ -n "$BYPASS_IP" ] && uci set adguardhome.config.dns_hijack_bypass_ip="$BYPASS_IP"
+        uci commit adguardhome
+        if [ "$DNS_HIJACK" = "0" ]; then
+            # 不劫持：REJECT LAN 出向 :53，回退 DHCP DNS；排除旁路由 IP 防误杀（无 wan 则不布规则）
+            BYPASS_IP=$(uci -q get adguardhome.config.dns_hijack_bypass_ip 2>/dev/null)
+            for _z in wan wan6; do
+                uci -q get firewall.$_z >/dev/null 2>&1 || continue
+                uci -q delete firewall.drop_lan_dns_$_z
+                uci set firewall.drop_lan_dns_$_z=rule
+                uci set firewall.drop_lan_dns_$_z.name="Reject LAN->$_z :53 (force router DNS)"
+                uci set firewall.drop_lan_dns_$_z.src='lan'
+                [ -n "$BYPASS_IP" ] && uci set firewall.drop_lan_dns_$_z.src_ip="!$BYPASS_IP"
+                uci set firewall.drop_lan_dns_$_z.dest="$_z"
+                uci set firewall.drop_lan_dns_$_z.dest_port='53'
+                uci set firewall.drop_lan_dns_$_z.proto='udp tcp'
+                uci set firewall.drop_lan_dns_$_z.target='REJECT'
+            done
+            uci commit firewall
+            logger -t firstboot-pkgs "DNS 拓扑: dnsmasq :53 兜底 + ADGH :5353（REJECT 出向 :53，不劫持）"
         else
-            # 主路由：dnsmasq :5453 -> ADGH :53
-            uci -q set dhcp.@dnsmasq[0].port='5453'
-            uci -q delete dhcp.@dnsmasq[0].server
-            uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
-            uci add_list dhcp.@dnsmasq[0].server='223.6.6.6'
-            uci set dhcp.@dnsmasq[0].noresolv='1'
-            uci set dhcp.@dnsmasq[0].dns_redirect='0'
-            uci commit dhcp
-            # 劫持开关持久化到 uci，由 adguardhome 服务按生命周期布/清（监听 :53 才劫持）
-            DNS_HIJACK=$(cat /etc/firstboot-pkgs/dns_hijack 2>/dev/null || echo 1)
-            uci set adguardhome.config.dns_hijack="$DNS_HIJACK"
-            uci commit adguardhome
-            if [ "$DNS_HIJACK" = "0" ]; then
-                # 不劫持：REJECT LAN 出向 :53，回退 DHCP DNS；排除旁路由 IP 防误杀
-                BYPASS_IP=$(uci -q get network.lan.ipaddr 2>/dev/null | sed 's/\.[0-9]*$/.2/')
-                for _z in wan wan6; do
-                    uci -q get firewall.$_z >/dev/null 2>&1 || continue
-                    uci -q delete firewall.drop_lan_dns_$_z
-                    uci set firewall.drop_lan_dns_$_z=rule
-                    uci set firewall.drop_lan_dns_$_z.name="Reject LAN->$_z :53 (force router DNS)"
-                    uci set firewall.drop_lan_dns_$_z.src='lan'
-                    [ -n "$BYPASS_IP" ] && uci set firewall.drop_lan_dns_$_z.src_ip="!$BYPASS_IP"
-                    uci set firewall.drop_lan_dns_$_z.dest="$_z"
-                    uci set firewall.drop_lan_dns_$_z.dest_port='53'
-                    uci set firewall.drop_lan_dns_$_z.proto='udp tcp'
-                    uci set firewall.drop_lan_dns_$_z.target='REJECT'
-                done
-                uci commit firewall
-                logger -t firstboot-pkgs "主路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53$([ "$have_oc" = 1 ] && echo ' -> OC :7874') + reject LAN 出向 :53"
-            else
-                logger -t firstboot-pkgs "主路由 DNS 拓扑: dnsmasq :5453 -> ADGH :53$([ "$have_oc" = 1 ] && echo ' -> OC :7874')（劫持由 adguardhome 服务按生命周期布设）"
-            fi
+            logger -t firstboot-pkgs "DNS 拓扑: dnsmasq :53 兜底 + ADGH :5353（劫持由 adguardhome 服务按生命周期布设 :53->:5353）"
         fi
     elif [ "$have_oc" = "1" ]; then
-        # 仅 OC：dnsmasq :53 上游指向 OC :7874
+        # 仅 OC：dnsmasq :53 上游指向 OC :7874 + 公有 DNS 兜底（OC 宕时仍解析）
         uci -q delete dhcp.@dnsmasq[0].server
         uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#7874'
+        uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
+        uci add_list dhcp.@dnsmasq[0].server='223.6.6.6'
         uci set dhcp.@dnsmasq[0].noresolv='1'
         uci set dhcp.@dnsmasq[0].dns_redirect='0'
         uci commit dhcp

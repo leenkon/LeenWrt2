@@ -1,7 +1,7 @@
 #!/bin/sh /etc/rc.common
-#
-# AdGuardHome 启动脚本（官方预编译二进制：以 root 运行绑定 53，复用 /etc/adguardhome/adguardhome.yaml，运行数据 /var/lib/adguardhome）
-
+# AdGuardHome 启动脚本（官方预编译二进制方案）
+# 取代 feeds 包的 init：以 root 运行（绑定 53 需特权），无需 capabilities jail。
+# 配置复用 files/etc/adguardhome/adguardhome.yaml，运行时数据放在 /var/lib/adguardhome。
 START=19
 STOP=89
 USE_PROCD=1
@@ -13,14 +13,34 @@ boot() {
 	start "$@"
 }
 
+# dnsmasq 常驻 :53 作兜底(零抖动)：ADGH 宕则清劫持表、LAN 直落 dnsmasq :53 不掉网。
+# 不再让出 :53——ADGH 改绑 :5353，故 dnsmasq 永占 :53（保留构建期上游 server）。
+setup_dnsmasq() {
+	uci -q delete dhcp.@dnsmasq[0].port
+	uci set dhcp.@dnsmasq[0].noresolv='1'
+	uci set dhcp.@dnsmasq[0].dns_redirect='0'
+	uci commit dhcp
+	/etc/init.d/dnsmasq restart 2>/dev/null
+}
+
 start_service() {
-	# 开机阶段延迟启动，等接口 up 再拉起
+	# 开机阶段先不启动，等接口 up 后再拉起，避免网络未就绪导致解析失败
 	[ -n "$ADGUARDHOME_BOOT" ] && return 0
 
 	config_load adguardhome
 	local enabled
 	config_get_bool enabled config enabled 1
 	[ "$enabled" = "1" ] || return 1
+
+	# ADGH 二进制缺失(未安装/被卸载)：不抢占 :53，回退 dnsmasq :53 直连公网 DNS，避免断网
+	if [ ! -x "$PROG" ]; then
+		logger -t adguardhome "AdGuardHome 未安装，回退 dnsmasq :53（不布劫持）"
+		setup_dnsmasq
+		return 1
+	fi
+
+	# dnsmasq 常驻 :53 兜底（ADGH 改绑 :5353，不再让出 :53）
+	setup_dnsmasq
 
 	mkdir -m 0700 -p /var/lib/adguardhome
 
@@ -35,33 +55,28 @@ start_service() {
 	procd_set_param respawn
 	procd_close_instance
 
-	# 劫持生命周期绑定 ADGH：仅监听 :53 后才布，停时清表（见 stop_service）
+	# 劫持监控循环(零抖动)：ADGH :5353 监听即布表强制过滤，失联即清表回退 dnsmasq :53。
+	# 与 ADGH(:5353)/dnsmasq(:53) 不同端口，清表不抢端口，故可安全周期运行(无 flap)。
 	local dhijack
 	config_get_bool dhijack config dns_hijack 1
 	if [ "$dhijack" = "1" ] && [ -x /usr/sbin/dns-hijack ]; then
-		( local i
-		  for i in $(seq 1 20); do
-			if ss -lun 2>/dev/null | grep -q ':53 ' || netstat -lun 2>/dev/null | grep -q ':53 '; then
-				chmod 755 /usr/sbin/dns-hijack
-				/usr/sbin/dns-hijack
-				logger -t adguardhome "ADGH 已监听 :53，已布 DNS 劫持"
-				break
-			fi
-			sleep 1
-		  done ) &
+		pkill -f "/usr/sbin/dns-hijack" 2>/dev/null   # 防重复循环
+		( while true; do /usr/sbin/dns-hijack; sleep 5; done ) &
 	fi
+}
+
+# ADGH 停止/卸载立即自愈：停监控循环 + 清劫持表(回退 dnsmasq :53，零抖动)。
+stop_service() {
+	pkill -f "/usr/sbin/dns-hijack" 2>/dev/null   # 停监控循环及任何残留 dns-hijack 调用
+	nft delete table inet dns_hijack 2>/dev/null
+	setup_dnsmasq
+	logger -t adguardhome "ADGH 停止/卸载：已清除劫持并回退 dnsmasq :53（自愈防断网）"
 }
 
 service_triggers() {
 	procd_add_reload_trigger adguardhome
 	if [ -n "$ADGUARDHOME_BOOT" ]; then
-		# 接口 up 后再真正启动（避开首启网络未就绪）
+		# 等待接口 up 后真正启动（解决首启网络未就绪导致的解析失败）
 		procd_add_raw_trigger 'interface.*.up' 5000 /etc/init.d/adguardhome restart
 	fi
-}
-
-# 停止/卸载时清表，避免重定向到已不存在的 :53 致断网
-stop_service() {
-	nft delete table inet dns_hijack 2>/dev/null
-	logger -t adguardhome "已清除 dns_hijack 规则（回退 DHCP DNS）"
 }
