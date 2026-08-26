@@ -106,7 +106,10 @@ jobs:
               echo ""
               echo "# ===== $_label ====="
               while read -r _pkg; do
-                [ -n "$_pkg" ] && [ "$_pkg" != \#* ] && echo "CONFIG_PACKAGE_${_pkg}=y"
+                case "$_pkg" in
+                  ''|\#*) continue ;;
+                esac
+                echo "CONFIG_PACKAGE_${_pkg}=y"
               done < "$_list"
             } >> .config
             echo "[build] 已追加 $_label（来自 $_list）"
