@@ -192,7 +192,7 @@ if ! uci -q get network.loopback >/dev/null 2>&1; then
 fi
 EOF
 
-    # 端口统一：eth0=WAN 不进桥，其余 eth 桥 br-lan 作 LAN；旁路由不建 WAN，下方全桥接 LAN（参考 immortalWrt 标准约定）
+    # 端口：主路由 WAN 锁 eth1（见下方 main 段）；旁路由不建 WAN，全口桥接 LAN
 
     if [ "$PROFILE_TYPE" = "bypass" ]; then
         gw_esc=$(_escape_uci "$CUSTOM_GATEWAY")
@@ -262,8 +262,7 @@ uci set network.wan6.reqprefix='auto'
 EOT
 )
         fi
-        # 端口：WAN 锁定 eth1（本机物理前口映射为 eth1；fanchmwrt 默认末口=WAN 会指到 eth3，必须显式指定）；
-        # 其余 eth* 桥 br-lan 作 LAN
+        # 端口：WAN 锁 eth1（物理前口映射为 eth1；fanchmwrt 默认末口=WAN 会指到 eth3，必须显式指定）
         PORT_FANCHM=$(cat <<'EOT'
 # 先删既有 br-lan device（默认配置含匿名段，不删会并存两个同名桥 → 端口双归属、LuCI 解析异常）
 for _d in $(uci show network 2>/dev/null | sed -n "s/^\(network\.[^.]*\)\.name='br-lan'$/\1/p"); do
