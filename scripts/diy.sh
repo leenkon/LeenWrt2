@@ -264,6 +264,10 @@ EOT
         fi
         # 端口：eth0=WAN 不进桥；其余 eth* 桥接 br-lan 作 LAN（避免 lan/wan 争 eth0）
         PORT_FANCHM=$(cat <<'EOT'
+# 先删既有 br-lan device（默认配置含匿名段，不删会并存两个同名桥 → eth0 双归属、LuCI 解析异常）
+for _d in $(uci show network 2>/dev/null | sed -n "s/^\(network\.[^.]*\)\.name='br-lan'$/\1/p"); do
+  uci -q delete "$_d"
+done
 _lan_eth=$(ls /sys/class/net 2>/dev/null | grep -E '^eth[0-9]+$' | grep -v '^eth0$' | sort -V)
 uci set network.br_lan=device
 uci set network.br_lan.name='br-lan'
