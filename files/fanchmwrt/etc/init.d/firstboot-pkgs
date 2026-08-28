@@ -4,10 +4,11 @@
 START=99
 STOP=10
 
+# apk 位于 /usr/bin/apk，早期启动阶段 PATH 可能不含 /usr/bin，不补全会 command not found(rc=127)
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
 install_all() {
     # 离线 .apk（允许未签名）：--no-network 防远程解析(不走网络，无需等网就绪)；失败重试 5 次(每次 5s)
-    # 不可用 timeout 包裹：busybox 默认未编译该 applet(CONFIG_BUSYBOX_DEFAULT_TIMEOUT=n)，
-    # 用了会因 command not found(rc=127) 导致安装根本不执行
     if [ -d /etc/firstboot-pkgs/apps ]; then
         for f in /etc/firstboot-pkgs/apps/*.apk; do
             [ -f "$f" ] || continue
