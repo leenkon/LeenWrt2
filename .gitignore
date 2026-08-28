@@ -1,6 +1,7 @@
-# 动态生成文件（diy.sh after 阶段生成，不提交）
+# 动态生成文件（diy.sh after 阶段生成，不提交；FILES 源为 files/fanchmwrt，仓库根 files/etc 恒为构建期副本）
 files/etc/uci-defaults/
 files/etc/shadow
+files/etc/firstboot-pkgs/
 
 # 动态下载文件（构建时下载，不提交）
 files/etc/openclash/core/

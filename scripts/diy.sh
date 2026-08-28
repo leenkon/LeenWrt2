@@ -192,9 +192,7 @@ if ! uci -q get network.loopback >/dev/null 2>&1; then
 fi
 EOF
 
-    # 端口统一处理：前口 eth0=WAN；其余 eth* 桥接为 LAN(br-lan)。25.12 的 x86 board.d 为 02_network(case 结构)，
-    # generic x86 走 99-default_network→eth0=LAN/eth1=WAN，与本机"前口=WAN"相反；故不在 board.d 层改文件(sed 翻转在 25.12 无效，且无 03-default-network)，
-    # 改在 uci 层显式绑 wan=eth0 并将 lan 桥接到其余口。旁路由(bypass)不建 WAN，下方全桥接 LAN。
+    # 端口统一：eth0=WAN 不进桥，其余 eth 桥 br-lan 作 LAN；旁路由不建 WAN，下方全桥接 LAN（参考 immortalWrt 标准约定）
 
     if [ "$PROFILE_TYPE" = "bypass" ]; then
         gw_esc=$(_escape_uci "$CUSTOM_GATEWAY")
@@ -256,15 +254,15 @@ EOT
         else
             WAN_FANCHM=$(cat <<EOT
 uci set network.wan.proto='dhcp'
-uci set network.wan.peerdns='1'
 uci set network.wan.device='eth0'
+uci set network.wan.peerdns='1'
 uci set network.wan6.proto='dhcpv6'
 uci set network.wan6.reqaddress='try'
 uci set network.wan6.reqprefix='auto'
 EOT
 )
         fi
-        # 端口统一：前口 eth0=WAN(由 WAN_FANCHM 绑定)；其余 eth* 桥接为 LAN(br-lan)，避免 lan/wan 同占 eth0。
+        # 端口：eth0=WAN 不进桥；其余 eth* 桥接 br-lan 作 LAN（避免 lan/wan 争 eth0）
         PORT_FANCHM=$(cat <<'EOT'
 _lan_eth=$(ls /sys/class/net 2>/dev/null | grep -E '^eth[0-9]+$' | grep -v '^eth0$' | sort -V)
 uci set network.br_lan=device

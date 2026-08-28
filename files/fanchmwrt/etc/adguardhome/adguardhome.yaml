@@ -11,10 +11,9 @@ dns:
     - 0.0.0.0
     - "::"
   upstream_dns:
-    - "127.0.0.1:7874"        # 主上游：OpenClash（域名分流/代理）。OC 停止/崩溃时 ADGH 自动跳过，改走下一条
-    - "127.0.0.1:53"          # 兜底（不依赖 OC）：本地 dnsmasq 常驻 :53，纯阿里云 DNS 223.5.5.5/223.6.6.6（明文）；OC 挂了也不影响普通解析
+    - "127.0.0.1:53"          # 唯一上游：本地 dnsmasq :53 常驻兜底；OC 经 dnsmasq 层(server=127.0.0.1#7874) 注入做域名分流，ADGH 不硬依赖 OC
   fallback_dns: []            # 兜底已并入 upstream_dns 第二条起，避免双路径重复
-  parallel_requests: false    # 先走 OC；OC 不可达才顺序尝试直连兜底（保证 OC 在时由其做域名分流，不泄漏）
+  parallel_requests: false    # 仅走 dnsmasq；由 dnsmasq 决定转发 OC(:7874) 或直连公网 DNS
   upstream_timeout: 3s
   cache_enabled: true
   cache_size: 500000

@@ -5,12 +5,21 @@ START=99
 STOP=10
 
 install_all() {
-    # 离线 .apk（允许未签名）
+    # 离线 .apk（允许未签名）：--no-network 防远程解析挂起；timeout 90 兜底 apk 异常死锁；失败重试 5 次(每次 5s)
     if [ -d /etc/firstboot-pkgs/apps ]; then
         for f in /etc/firstboot-pkgs/apps/*.apk; do
             [ -f "$f" ] || continue
-            if apk --allow-untrusted add "$f" >/dev/null 2>&1; then
+            local _i _rc=1
+            for _i in 1 2 3 4 5; do
+                timeout 90 apk --allow-untrusted --no-network add "$f" >/dev/null 2>&1
+                _rc=$?
+                [ $_rc -eq 0 ] && break
+                logger -t firstboot-pkgs "离线安装 $f 第 $_i 次失败(rc=$_rc)，5s 后重试"
+                sleep 5
+            done
+            if [ $_rc -eq 0 ]; then
                 rm -f "$f"
+                logger -t firstboot-pkgs "离线安装完成: $f"
             else
                 logger -t firstboot-pkgs "离线安装失败(保留待查): $f"
             fi
@@ -52,11 +61,9 @@ install_all() {
     rm -rf /etc/firstboot-pkgs
 }
 
-# 首启布 DNS 链（包已装才执行）。新拓扑（零抖动）：
-#   dnsmasq 常驻 :53 兜底；ADGH 占 :5353；nft 重定向 LAN :53 -> :5353 过滤。
-#   ADGH 宕：清劫持表、LAN 直落 dnsmasq :53 不掉网。
-#   OC：dnsmasq 上游指向 OC :7874 + 公有 DNS 兜底。
-# 门控依据：ADGH/OC 是否编译进固件（按 yml 勾选）
+# 首启布 DNS 链（包已装才执行）。零抖动拓扑：
+#   dnsmasq :53 兜底；ADGH :5353 受劫持过滤；ADGH 宕则清表 LAN 直落 dnsmasq :53。
+#   OC：dnsmasq 上游指向 OC :7874 + 公有 DNS 兜底。门控依据：ADGH/OC 是否编译进固件。
 apply_dns_chain() {
     local prof="$1"
     local have_adgh=0 have_oc=0
@@ -91,11 +98,12 @@ apply_dns_chain() {
         logger -t firstboot-pkgs "AdGuardHome 已启用并启动"
     fi
 
-    # 仅当 ADGH 真实装上（/usr/bin/AdGuardHome 存在）才布链，否则保持 dnsmasq :53 默认
+    # DNS 链按装上的组件布设：ADGH 在→dnsmasq+劫持(:5353)；仅 OC→dnsmasq 前置 OC(:7874)；皆无→保持 dnsmasq :53 默认
     if [ -x /usr/bin/AdGuardHome ]; then
-        # dnsmasq 常驻 :53 兜底（不抢端口），上游指向公有 DNS（ADGH 宕时直连）
+        # dnsmasq :53 兜底；上游：OC 在则前置 OC(:7874)，否则公网 DNS。ADGH 以 dnsmasq 为上游，不硬依赖 OC
         uci -q delete dhcp.@dnsmasq[0].port
         uci -q delete dhcp.@dnsmasq[0].server
+        [ "$have_oc" = "1" ] && uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#7874'
         uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
         uci add_list dhcp.@dnsmasq[0].server='223.6.6.6'
         uci set dhcp.@dnsmasq[0].noresolv='1'
