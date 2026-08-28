@@ -9,14 +9,16 @@ install_all() {
     if [ -d /etc/firstboot-pkgs/apps ]; then
         for f in /etc/firstboot-pkgs/apps/*.apk; do
             [ -f "$f" ] || continue
-            local _i _rc=1
+            local _i _rc=1 _log=/tmp/.firstboot-pkgs.log
             for _i in 1 2 3 4 5; do
-                timeout 90 apk --allow-untrusted --no-network add "$f" >/dev/null 2>&1
+                timeout 90 apk --allow-untrusted --no-network add "$f" >"$_log" 2>&1
                 _rc=$?
                 [ $_rc -eq 0 ] && break
-                logger -t firstboot-pkgs "离线安装 $f 第 $_i 次失败(rc=$_rc)，5s 后重试"
+                # 保留 apk 真实报错，否则失败时只有 rc 无从诊断
+                logger -t firstboot-pkgs "离线安装 $f 第 $_i 次失败(rc=$_rc): $(tail -2 "$_log" 2>/dev/null)"
                 sleep 5
             done
+            rm -f "$_log"
             if [ $_rc -eq 0 ]; then
                 rm -f "$f"
                 logger -t firstboot-pkgs "离线安装完成: $f"
