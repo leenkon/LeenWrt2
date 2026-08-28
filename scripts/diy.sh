@@ -319,8 +319,7 @@ chmod 755 /etc/init.d/cpufreq-perf
 /etc/init.d/cpufreq-perf enable
 /etc/init.d/cpufreq-perf start
 
-# 首启安装由 /etc/rc.local 在系统就绪后触发（早期 PATH 不含 /usr/bin；在线装包也需网络就绪）；
-# enable 仅备下次启动兜底
+# 首启安装由 rc.local 在系统就绪后触发(PATH/网络就绪)；enable 备下次启动兜底
 chmod 755 /etc/init.d/firstboot-pkgs
 /etc/init.d/firstboot-pkgs enable
 

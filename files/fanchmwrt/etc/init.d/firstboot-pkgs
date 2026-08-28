@@ -4,9 +4,6 @@
 START=99
 STOP=10
 
-# PATH 兜底：apk 在 /usr/bin，执行环境 PATH 缺它则 command not found(rc=127)
-export PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-
 install_all() {
     # 本地 .apk 离线装(允许未签名)：--no-network 不走网络，失败重试 5 次
     if [ -d /etc/firstboot-pkgs/apps ]; then
