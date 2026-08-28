@@ -96,6 +96,64 @@ ruby)
     fi
     ;;
 
+themes)
+    # 须在 feeds update -a 之后运行：fanchmwrt 主题在克隆仓内(非独立 feed)，glob 定位；argon/bootstrap 在 feeds/luci。
+    # 标题覆盖为 LuCI 动态标题({{ hostname }})；fanchmwrt footer 剥离保留 #modemenu(菜单依赖)，argon/bootstrap 移除整段 footer。
+    echo "[diy] themes: 处理 fanchmwrt/argon/bootstrap 主题标题与 footer"
+    OPENWRT_DIR="$PROJECT_ROOT/openwrt"
+    python3 - "$OPENWRT_DIR" <<'PY'
+import sys, os, re, glob
+openwrt = sys.argv[1]
+
+def strip_footer(path, keep_inner):
+    s0 = open(path, encoding='utf-8').read()
+    if keep_inner:
+        # fanchmwrt：保留 #modemenu 挂载点（顶部菜单脚本依赖），仅剥离 <span> 文案与 footer 标签
+        s = re.sub(r'<span>.*?</span>\s*', '', s0, flags=re.S)
+        s = re.sub(r'</?footer>', '', s0)
+    else:
+        # argon / bootstrap：移除整个 <footer> 区域
+        s = re.sub(r'<footer\b.*?</footer>', '', s0, flags=re.S)
+    s = re.sub(r'\n[ \t]*\n[ \t]*\n', '\n\n', s)
+    if s != s0:
+        open(path, 'w', encoding='utf-8').write(s)
+        return True
+    return False
+
+theme_dirs = set()
+for p in glob.glob(os.path.join(openwrt, '**', 'luci-theme-*'), recursive=True):
+    if os.path.isdir(p):
+        theme_dirs.add(p)
+
+for d in sorted(theme_dirs):
+    name = os.path.basename(d)
+    if name == 'luci-theme-fanchmwrt':
+        # fanchmwrt：标题覆盖为 LuCI 动态标题
+        for h in glob.glob(os.path.join(d, '**', 'header.ut'), recursive=True):
+            s0 = open(h, encoding='utf-8').read()
+            new = "<title>{{ striptags(`${boardinfo.hostname ?? '?'}${node ? ` - ${node.title}` : ''}`) }} - LuCI</title>"
+            m = re.sub(r'<title>.*?</title>', new, s0, count=1, flags=re.S)
+            if m != s0:
+                open(h, 'w', encoding='utf-8').write(m)
+                print("[diy] 主题标题已覆盖为 {{ hostname }}: " + h)
+            else:
+                print("[diy] 未在 header.ut 找到 <title>: " + h)
+        # fanchmwrt：移除 footer（保留 #modemenu）
+        for f in glob.glob(os.path.join(d, '**', 'footer.ut'), recursive=True):
+            if strip_footer(f, keep_inner=True):
+                print("[diy] 已移除 fanchmwrt footer（保留 #modemenu）: " + f)
+            else:
+                print("[diy] fanchmwrt footer 无变化: " + f)
+    else:
+        # argon / bootstrap：移除整个 footer
+        for f in glob.glob(os.path.join(d, '**', 'footer.ut'), recursive=True):
+            if strip_footer(f, keep_inner=False):
+                print("[diy] 已移除 " + name + " footer: " + f)
+            else:
+                print("[diy] " + name + " footer 无变化: " + f)
+PY
+    ;;
+
 after)
     echo "[diy] after: $PROFILE_TYPE (core=$CORE)"
     case "$FILES_DIR_NAME" in
@@ -134,13 +192,9 @@ if ! uci -q get network.loopback >/dev/null 2>&1; then
 fi
 EOF
 
-    # x86 网口翻转：源码默认末口=WAN，翻为首口=WAN（其余桥接 LAN）；旁路由下方单独全桥接 LAN
-    _SRC_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../openwrt" 2>/dev/null && pwd || true)"
-    [ -z "$_SRC_ROOT" ] && _SRC_ROOT="."
-    _03net="$_SRC_ROOT/target/linux/x86/base-files/etc/board.d/03-default-network"
-    if [ -f "$_03net" ]; then
-      sed -i 's/\[ "$idx" -eq "$eth_count" \]/[ "$idx" -eq 1 ]/' "$_03net"
-    fi
+    # 端口统一处理：前口 eth0=WAN；其余 eth* 桥接为 LAN(br-lan)。25.12 的 x86 board.d 为 02_network(case 结构)，
+    # generic x86 走 99-default_network→eth0=LAN/eth1=WAN，与本机"前口=WAN"相反；故不在 board.d 层改文件(sed 翻转在 25.12 无效，且无 03-default-network)，
+    # 改在 uci 层显式绑 wan=eth0 并将 lan 桥接到其余口。旁路由(bypass)不建 WAN，下方全桥接 LAN。
 
     if [ "$PROFILE_TYPE" = "bypass" ]; then
         gw_esc=$(_escape_uci "$CUSTOM_GATEWAY")
@@ -193,6 +247,7 @@ uci set network.wan.username='$u'
 uci set network.wan.password='$p'
 uci set network.wan.ipv6='auto'
 uci set network.wan.peerdns='1'
+uci set network.wan.device='eth0'
 uci set network.wan.mtu_fix='1'
 uci set network.wan.mssfix='1'
 uci -q delete network.wan6
@@ -202,14 +257,31 @@ EOT
             WAN_FANCHM=$(cat <<EOT
 uci set network.wan.proto='dhcp'
 uci set network.wan.peerdns='1'
+uci set network.wan.device='eth0'
 uci set network.wan6.proto='dhcpv6'
 uci set network.wan6.reqaddress='try'
 uci set network.wan6.reqprefix='auto'
 EOT
 )
         fi
+        # 端口统一：前口 eth0=WAN(由 WAN_FANCHM 绑定)；其余 eth* 桥接为 LAN(br-lan)，避免 lan/wan 同占 eth0。
+        PORT_FANCHM=$(cat <<'EOT'
+_lan_eth=$(ls /sys/class/net 2>/dev/null | grep -E '^eth[0-9]+$' | grep -v '^eth0$' | sort -V)
+uci set network.br_lan=device
+uci set network.br_lan.name='br-lan'
+uci set network.br_lan.type='bridge'
+uci -q delete network.br_lan.ports
+for _e in $_lan_eth; do uci add_list network.br_lan.ports="$_e"; done
+uci set network.lan.device='br-lan'
+uci -q delete network.lan.type
+uci -q delete network.lan.ports
+uci -q delete network.lan.ifname
+uci commit network
+EOT
+)
         cat >> "$OUT" <<EOT
 $WAN_FANCHM
+$PORT_FANCHM
 uci set network.lan.proto='static'
 uci set network.lan.ipaddr='$ip_esc'
 uci set network.lan.netmask='$SUBNET_MASK'
