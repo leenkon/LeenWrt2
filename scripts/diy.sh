@@ -110,7 +110,7 @@ def strip_footer(path, keep_inner):
     if keep_inner:
         # fanchmwrt：保留 #modemenu 挂载点（顶部菜单脚本依赖），仅剥离 <span> 文案与 footer 标签
         s = re.sub(r'<span>.*?</span>\s*', '', s0, flags=re.S)
-        s = re.sub(r'</?footer>', '', s0)
+        s = re.sub(r'</?footer>', '', s)
     else:
         # argon / bootstrap：移除整个 <footer> 区域
         s = re.sub(r'<footer\b.*?</footer>', '', s0, flags=re.S)
@@ -319,7 +319,7 @@ chmod 755 /etc/init.d/cpufreq-perf
 /etc/init.d/cpufreq-perf enable
 /etc/init.d/cpufreq-perf start
 
-# 首启安装由 rc.local 在系统就绪后触发(PATH/网络就绪)；enable 备下次启动兜底
+# 首启安装由 rc.local 触发；enable 备下次启动兜底
 chmod 755 /etc/init.d/firstboot-pkgs
 /etc/init.d/firstboot-pkgs enable
 
@@ -330,10 +330,23 @@ if [ -x /etc/init.d/uhttpd ]; then
 fi
 [ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd enable 2>/dev/null
 
+    # 主题默认浅色（覆盖 fwx 出厂 theme_mode=1 深色）
+    if uci -q get fwx.global >/dev/null 2>&1; then
+        uci set fwx.global.theme_mode='0'
+        uci commit fwx
+    fi
+
 logger -t uci-defaults "LeenWrt 配置应用完成"
 EOT
     chmod 755 "$OUT" 2>/dev/null || true
     echo "[diy] 输出: $OUT (FanchmWrt lean)"
+
+    if [ -n "$ROOT_PASSWORD" ]; then
+        command -v openssl >/dev/null 2>&1 || error_exit "缺失依赖: openssl (用于 root 密码哈希)"
+        crypt=$(printf '%s' "$ROOT_PASSWORD" | openssl passwd -6 -stdin) || error_exit "openssl密码加密失败"
+        echo "root:$crypt:0:0:99999:7:::" > "$SHADOW"
+        chmod 600 "$SHADOW" 2>/dev/null || true
+    fi
     ;;
 *) error_exit "PHASE仅支持 before / after / ruby" ;;
 esac

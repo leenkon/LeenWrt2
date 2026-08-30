@@ -1,34 +1,37 @@
 #!/bin/sh /etc/rc.common
-# FanchmWrt 首启安装服务：联网后离线装 .apk + 在线装 lists/，再布 OC/ADGH DNS 链，完成自清理
-# 离线 .apk 来源须与目标内核 vermagic 匹配，否则 kmod 无法加载
+# FanchmWrt 首启安装：离线装 .apk + 在线 lists/ + 布 ADGH/OC DNS 链，完成自清理
+# 离线 .apk 须与目标内核 vermagic 匹配，否则 kmod 无法加载
 START=99
 STOP=10
 
-install_all() {
-    # 本地 .apk 离线装(允许未签名)：--no-network 不走网络，失败重试 5 次
-    if [ -d /etc/firstboot-pkgs/apps ]; then
-        for f in /etc/firstboot-pkgs/apps/*.apk; do
-            [ -f "$f" ] || continue
-            local _i _rc=1 _log=/tmp/.firstboot-pkgs.log
-            for _i in 1 2 3 4 5; do
-                apk --allow-untrusted --no-network add "$f" >"$_log" 2>&1
-                _rc=$?
-                [ $_rc -eq 0 ] && break
-                # 保留 apk 真实报错，否则失败时只有 rc 无从诊断
-                logger -t firstboot-pkgs "离线安装 $f 第 $_i 次失败(rc=$_rc): $(tail -2 "$_log" 2>/dev/null)"
-                sleep 5
-            done
-            rm -f "$_log"
-            if [ $_rc -eq 0 ]; then
-                rm -f "$f"
-                logger -t firstboot-pkgs "离线安装完成: $f"
-            else
-                logger -t firstboot-pkgs "离线安装失败(保留待查): $f"
-            fi
+install_offline() {
+    # 离线 .apk：--no-network 即时装，失败重试 5 次；全部成功返回 0
+    [ -d /etc/firstboot-pkgs/apps ] || return 0
+    local ok=1
+    for f in /etc/firstboot-pkgs/apps/*.apk; do
+        [ -f "$f" ] || continue
+        local _i _rc=1 _log=/tmp/.firstboot-pkgs.log
+        for _i in 1 2 3 4 5; do
+            apk --allow-untrusted --no-network add "$f" >"$_log" 2>&1
+            _rc=$?
+            [ $_rc -eq 0 ] && break
+            logger -t firstboot-pkgs "离线安装 $f 第 $_i 次失败(rc=$_rc): $(tail -2 "$_log" 2>/dev/null)"
+            sleep 5
         done
-    fi
+        rm -f "$_log"
+        if [ $_rc -eq 0 ]; then
+            rm -f "$f"
+            logger -t firstboot-pkgs "离线安装完成: $f"
+        else
+            logger -t firstboot-pkgs "离线安装失败(保留待查): $f"
+            ok=0
+        fi
+    done
+    [ $ok -eq 1 ] && return 0 || return 1
+}
 
-    # 在线官方源包逐包安装（apk 原子提交，整批失败会漏装 luci）
+install_online_and_dns() {
+    # 在线包逐包装(需联网)
     local prof pkg_list pkg
     prof=$(cat /etc/firstboot-pkgs/profile 2>/dev/null)
     install_list() {
@@ -45,32 +48,28 @@ install_all() {
     if ! apk update >/dev/null 2>&1; then
         logger -t firstboot-pkgs "apk update 失败：跳过在线安装（检查 /etc/apk/repositories 与联网）"
     else
-        # common 始终装；非 Mini 额外装 default.txt
         install_list /etc/firstboot-pkgs/lists/common.txt
         [ "$prof" != "mini" ] && install_list /etc/firstboot-pkgs/lists/default.txt
     fi
 
-    # ADGH/OC 已编译进固件（无需在线装），DNS 链不依赖 apk update 成败
+    # DNS 链不依赖 apk update 成败
     apply_dns_chain "$prof"
 
-    # 重启 Web 服务以加载新装的 luci-app-*
+    # 重启 Web 以加载新装 luci-app
     [ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd restart 2>/dev/null
     [ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd restart 2>/dev/null
 
-    # 自清理，避免重复执行
     /etc/init.d/firstboot-pkgs disable 2>/dev/null
     rm -f /etc/init.d/firstboot-pkgs
     rm -rf /etc/firstboot-pkgs
+    logger -t firstboot-pkgs "首启安装完成，已自清理"
 }
 
-# 首启布 DNS 链（包已装才执行）。零抖动拓扑：
-#   dnsmasq :53 兜底；ADGH :5353 受劫持过滤；ADGH 宕则清表 LAN 直落 dnsmasq :53。
-#   OC：dnsmasq 上游指向 OC :7874 + 公有 DNS 兜底。门控依据：ADGH/OC 是否编译进固件。
+# 首启布 DNS 链：dnsmasq :53 兜底，ADGH :5353 受劫持，OC 前置 :7874
 apply_dns_chain() {
     local prof="$1"
     local have_adgh=0 have_oc=0
 
-    # 门控依据：二进制是否已编译进固件
     [ -x /usr/bin/AdGuardHome ] && have_adgh=1
     [ -x /etc/init.d/openclash ] && have_oc=1
     [ "$have_adgh" = "0" ] && [ "$have_oc" = "0" ] && {
@@ -78,7 +77,6 @@ apply_dns_chain() {
         return 0
     }
 
-    # OpenClash：Meta / redir-host，sniffer 由 custom_overwrite 开启
     if [ "$have_oc" = "1" ] && { [ -x /etc/init.d/openclash ] || command -v openclash >/dev/null 2>&1; }; then
         uci -q get openclash.config.core_type >/dev/null || uci set openclash.config=openclash
         uci set openclash.config.core_type='Meta'
@@ -92,7 +90,6 @@ apply_dns_chain() {
         logger -t firstboot-pkgs "OpenClash 已配置并启用"
     fi
 
-    # 启用并启动 AdGuardHome
     if [ "$have_adgh" = "1" ] && [ -x /etc/init.d/adguardhome ]; then
         uci set adguardhome.config.enabled='1' 2>/dev/null
         /etc/init.d/adguardhome enable 2>/dev/null
@@ -100,9 +97,7 @@ apply_dns_chain() {
         logger -t firstboot-pkgs "AdGuardHome 已启用并启动"
     fi
 
-    # DNS 链按装上的组件布设：ADGH 在→dnsmasq+劫持(:5353)；仅 OC→dnsmasq 前置 OC(:7874)；皆无→保持 dnsmasq :53 默认
     if [ -x /usr/bin/AdGuardHome ]; then
-        # dnsmasq :53 兜底；上游：OC 在则前置 OC(:7874)，否则公网 DNS。ADGH 以 dnsmasq 为上游，不硬依赖 OC
         uci -q delete dhcp.@dnsmasq[0].port
         uci -q delete dhcp.@dnsmasq[0].server
         [ "$have_oc" = "1" ] && uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#7874'
@@ -113,15 +108,14 @@ apply_dns_chain() {
         uci set dhcp.@dnsmasq[0].dns_redirect='0'
         uci commit dhcp
 
-        # 劫持开关持久化到 uci，由 adguardhome 服务按生命周期布/清（重定向 :53 -> :5353）
+        # 劫持开关持久化(由 adguardhome 服务按生命周期布/清)
         DNS_HIJACK=$(cat /etc/firstboot-pkgs/dns_hijack 2>/dev/null || echo 1)
         uci set adguardhome.config.dns_hijack="$DNS_HIJACK"
-        # 双路由主路由：填对端旁路由 IP，供 dns-hijack 排除防二次劫持；单路由/旁路由留空=全量劫持
+        # 双路由：填对端旁路由 IP 供 dns-hijack 排除防二次劫持
         BYPASS_IP=$(cat /etc/firstboot-pkgs/bypass_ip 2>/dev/null)
         [ -n "$BYPASS_IP" ] && uci set adguardhome.config.dns_hijack_bypass_ip="$BYPASS_IP"
         uci commit adguardhome
         if [ "$DNS_HIJACK" = "0" ]; then
-            # 不劫持：REJECT LAN 出向 :53，回退 DHCP DNS；排除旁路由 IP 防误杀（无 wan 则不布规则）
             BYPASS_IP=$(uci -q get adguardhome.config.dns_hijack_bypass_ip 2>/dev/null)
             for _z in wan wan6; do
                 uci -q get firewall.$_z >/dev/null 2>&1 || continue
@@ -141,7 +135,6 @@ apply_dns_chain() {
             logger -t firstboot-pkgs "DNS 拓扑: dnsmasq :53 兜底 + ADGH :5353（劫持由 adguardhome 服务按生命周期布设 :53->:5353）"
         fi
     elif [ "$have_oc" = "1" ]; then
-        # 仅 OC：dnsmasq :53 上游指向 OC :7874 + 公有 DNS 兜底（OC 宕时仍解析）
         uci -q delete dhcp.@dnsmasq[0].server
         uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#7874'
         uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
@@ -156,13 +149,13 @@ apply_dns_chain() {
 }
 
 wait_net() {
-    # 等公网可达：ping 或 HTTPS 任一为真（旁路由无 wan 也能靠网关出）
+    # 等公网可达(ping 或 HTTPS)
     local i=0
     while [ $i -lt 30 ]; do
         if ping -c1 -W2 223.5.5.5 >/dev/null 2>&1; then
             return 0
         fi
-        # HTTPS 可达性探测（ICMP 可能被丢弃）
+        # ICMP 可能被丢弃，补 HTTPS 探测
         if wget -T 4 -q -O /dev/null https://connectivitycheck.gstatic.com/generate_204 2>/dev/null \
            || wget -T 4 -q -O /dev/null https://www.qualcomm.com/ 2>/dev/null; then
             return 0
@@ -174,12 +167,20 @@ wait_net() {
 }
 
 start() {
-    # 后台执行，网络就绪才装；超时则保留服务下次重试
+    # 原子锁防 uci-defaults 与 rc.d 并发(服务既 enable 又由 rc.local 触发)
+    LOCK=/tmp/.firstboot-pkgs.lock
     (
-        if wait_net; then
-            install_all
-        else
-            logger -t firstboot-pkgs "等待网络超时，保留服务下次启动重试"
+        if mkdir "$LOCK" 2>/dev/null; then
+            if install_offline; then
+                if wait_net; then
+                    install_online_and_dns
+                else
+                    logger -t firstboot-pkgs "等待网络超时，在线包下次启动重试"
+                fi
+            else
+                logger -t firstboot-pkgs "离线包存在失败，保留服务下次启动重试"
+            fi
+            rmdir "$LOCK" 2>/dev/null
         fi
     ) &
 }
