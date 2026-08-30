@@ -152,6 +152,18 @@ for d in sorted(theme_dirs):
             else:
                 print("[diy] " + name + " footer 无变化: " + f)
 PY
+
+    # fwxd：修复 dashboard 联网状态误报（DNS 劫持/ADGH 未就绪时 www.baidu.com 解析失败）
+    FWXD_CHECK="$PROJECT_ROOT/feeds/fwx/fwxd/src/check_main.c"
+    FWXD_PATCH="$PROJECT_ROOT/patches/fwx/fwxd-internet-check-dns-agnostic.patch"
+    if [ -f "$FWXD_CHECK" ] && [ -f "$FWXD_PATCH" ]; then
+        if patch -p1 --dry-run -d "$PROJECT_ROOT/feeds/fwx/fwxd" < "$FWXD_PATCH" >/dev/null 2>&1; then
+            patch -p1 -d "$PROJECT_ROOT/feeds/fwx/fwxd" < "$FWXD_PATCH"
+            echo "[diy] 已应用 fwxd 联网检查补丁 -> $FWXD_CHECK"
+        else
+            echo "[diy] WARN: fwxd 联网检查补丁上下文不符，跳过" >&2
+        fi
+    fi
     ;;
 
 after)
