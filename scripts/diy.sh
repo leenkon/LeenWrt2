@@ -154,15 +154,16 @@ for d in sorted(theme_dirs):
 PY
 
     # fwxd：修复 dashboard 联网状态误报（DNS 劫持/ADGH 未就绪时 www.baidu.com 解析失败）
-    FWXD_CHECK="$PROJECT_ROOT/feeds/fwx/fwxd/src/check_main.c"
+    # LeenWrt2 的 fwxd 源码在主仓 clone（package/fcm/fwxd），非 feeds/fwx（immortalwrt 才用 src-link）
+    FWXD_DIR="$OPENWRT_DIR/package/fcm/fwxd"
+    FWXD_CHECK="$FWXD_DIR/src/check_main.c"
     FWXD_PATCH="$PROJECT_ROOT/patches/fwx/fwxd-internet-check-dns-agnostic.patch"
-    if [ -f "$FWXD_CHECK" ] && [ -f "$FWXD_PATCH" ]; then
-        if patch -p1 --dry-run -d "$PROJECT_ROOT/feeds/fwx/fwxd" < "$FWXD_PATCH" >/dev/null 2>&1; then
-            patch -p1 -d "$PROJECT_ROOT/feeds/fwx/fwxd" < "$FWXD_PATCH"
-            echo "[diy] 已应用 fwxd 联网检查补丁 -> $FWXD_CHECK"
-        else
-            echo "[diy] WARN: fwxd 联网检查补丁上下文不符，跳过" >&2
-        fi
+    [ -d "$FWXD_DIR" ] || error_exit "未找到 fwxd 源码目录: $FWXD_DIR（主仓 clone 路径是否变化？）"
+    if patch -p1 --dry-run -d "$FWXD_DIR" < "$FWXD_PATCH" >/dev/null 2>&1; then
+        patch -p1 -d "$FWXD_DIR" < "$FWXD_PATCH"
+        echo "[diy] 已应用 fwxd 联网检查补丁 -> $FWXD_CHECK"
+    else
+        error_exit "fwxd 联网检查补丁上下文不符，未应用（详见 $FWXD_PATCH）"
     fi
     ;;
 
@@ -341,6 +342,12 @@ if [ -x /etc/init.d/uhttpd ]; then
     /etc/init.d/uhttpd start 2>/dev/null
 fi
 [ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd enable 2>/dev/null
+# 网页后台登录复用 root 系统密码（fanchmwrt 默认未委托，需显式设置以对齐 LeenWrt 行为）
+uci -q get rpcd.@login[0] >/dev/null 2>&1 || uci add rpcd login
+uci set rpcd.@login[0].username='root'
+uci set rpcd.@login[0].password='\$p\$root'
+uci commit rpcd
+/etc/init.d/rpcd restart 2>/dev/null
 
     # 主题默认浅色（覆盖 fwx 出厂 theme_mode=1 深色）
     if uci -q get fwx.global >/dev/null 2>&1; then
@@ -355,7 +362,8 @@ EOT
 
     if [ -n "$ROOT_PASSWORD" ]; then
         command -v openssl >/dev/null 2>&1 || error_exit "缺失依赖: openssl (用于 root 密码哈希)"
-        crypt=$(printf '%s' "$ROOT_PASSWORD" | openssl passwd -6 -stdin) || error_exit "openssl密码加密失败"
+        # musl crypt 仅认 DES/MD5($1$)，dropbear 才支持 SHA-512；用 -1 保证 SSH 与网页登录一致
+        crypt=$(printf '%s' "$ROOT_PASSWORD" | openssl passwd -1 -stdin) || error_exit "openssl密码加密失败"
         echo "root:$crypt:0:0:99999:7:::" > "$SHADOW"
         chmod 600 "$SHADOW" 2>/dev/null || true
     fi

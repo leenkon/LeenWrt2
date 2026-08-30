@@ -2,6 +2,7 @@
 luci-app-adguardhome
 luci-i18n-adguardhome-zh-cn
 wget
+ca-bundle
 ipset
 kmod-ipset
 luci-compat
