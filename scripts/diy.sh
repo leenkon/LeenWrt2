@@ -165,6 +165,19 @@ PY
     else
         error_exit "fwxd 联网检查补丁上下文不符，未应用（详见 $FWXD_PATCH）"
     fi
+
+    # fwx 内核模块：DPI 边界钳制（read_skb 的 kmalloc(len) 须 clamp 到 skb 尾部，
+    # 否则发送方伪造 tot_len/udph->len/doff 越界，触发 FORTIFY memcpy BUG / 原子分配失败→panic/重启。
+    # 与 LeenWrt 共用同一补丁；fanchmwrt 内核已导出 4 参 nf_send_reset，故无需 kmod-nf_send_reset 补丁。
+    FWX_DIR="$OPENWRT_DIR/package/fcm/fwx"
+    FWX_PATCH="$PROJECT_ROOT/patches/fwx/fwx-match-feature-crash.patch"
+    [ -d "$FWX_DIR" ] || error_exit "未找到 fwx 内核模块源码目录: $FWX_DIR（主仓 clone 路径是否变化？）"
+    if patch -p1 --dry-run -d "$FWX_DIR" < "$FWX_PATCH" >/dev/null 2>&1; then
+        patch -p1 -d "$FWX_DIR" < "$FWX_PATCH"
+        echo "[diy] 已应用 fwx DPI 边界钳制补丁 -> $FWX_DIR/src/fwx_main.c"
+    else
+        error_exit "fwx DPI 边界钳制补丁上下文不符，未应用（详见 $FWX_PATCH）；fwx 版本漂移需重新核对"
+    fi
     ;;
 
 after)
