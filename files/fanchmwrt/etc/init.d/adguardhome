@@ -15,10 +15,24 @@ boot() {
 }
 
 # dnsmasq 常驻 :53 兜底：ADGH 宕则清劫持表、LAN 直落 dnsmasq(零抖动)
+# 上游自愈+自适应：OC 已装前置 :7874 走分流；保留构建期上游；全空按拓扑兜底（无上游则全部查询 REFUSED）
 setup_dnsmasq() {
 	uci -q delete dhcp.@dnsmasq[0].port
 	uci set dhcp.@dnsmasq[0].noresolv='1'
 	uci set dhcp.@dnsmasq[0].dns_redirect='0'
+
+	_oc=""; [ -x /etc/init.d/openclash ] && _oc='127.0.0.1#7874'
+	_tail=""
+	for s in $(uci -q get dhcp.@dnsmasq[0].server); do
+		[ "$s" = "$_oc" ] || _tail="$_tail $s"
+	done
+	# OC 之外无上游时按拓扑补：有 WAN 直连公网，无 WAN(旁路由) 走 lan 网关
+	if [ -z "$_tail" ]; then
+		uci -q get network.wan >/dev/null && _tail='223.5.5.5 223.6.6.6' || _tail=$(uci -q get network.lan.gateway)
+	fi
+	uci -q delete dhcp.@dnsmasq[0].server
+	for s in $_oc $_tail; do uci add_list dhcp.@dnsmasq[0].server="$s"; done
+
 	uci commit dhcp
 	/etc/init.d/dnsmasq restart 2>/dev/null
 }

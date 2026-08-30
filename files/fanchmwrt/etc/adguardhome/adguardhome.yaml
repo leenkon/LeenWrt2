@@ -10,14 +10,16 @@ dns:
   bind_hosts:
     - 0.0.0.0
     - "::"
+  # 上游主走 dnsmasq(:53)：OC 装了由 init.d 前置 OC(:7874) 做域名分流；备走 IP 形式 DoH 兜底。
+  # DoH 必须是 IP 形式：域名形式需先经 bootstrap_dns 走 UDP:53 解析主机名，UDP:53 不通时与 dnsmasq 同时失效。
   upstream_dns:
-    - "https://dns.alidns.com/dns-query"   # 主：DoH 抗污染，拉列表/查询均走此
-    - "127.0.0.1:53"                        # 备：dnsmasq :53（含 OC :7874 分流），主 DoH 不可达回落
-  bootstrap_dns:              # 仅解析域名形式 upstream 自身；本配置 upstream 为 IP/URL，实际不参与
+    - "127.0.0.1:53"                  # 主：dnsmasq（OC 装了则其上游自动前置 :7874）
+    - "https://223.5.5.5/dns-query"   # 备：IP 形式 DoH，dnsmasq/OC 不可用时兜底
+  bootstrap_dns:              # 仅解析"域名形式 upstream"自身；当前为 IP 形式，不参与
     - "223.5.5.5"
     - "223.6.6.6"
-  fallback_dns: []            # 主/备已覆盖
-  parallel_requests: false    # 串行：先主 DoH 再备 dnsmasq
+  fallback_dns: []            # 主/备已覆盖；parallel_requests=false 保证按序先试主
+  parallel_requests: false
   upstream_timeout: 3s
   cache_enabled: true
   cache_size: 500000

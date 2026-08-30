@@ -78,6 +78,7 @@ apply_dns_chain() {
     }
 
     # 上游拓扑自适应：有 wan→公网 DNS + resolv.conf 回指 dnsmasq(绕 ISP 污染)；无 wan→经主路由网关
+    # OC(:7874) 前置不在此做：由 adguardhome init.d 的 setup_dnsmasq 统一处理(去重+自愈)
     add_dnsmasq_upstream() {
         if uci -q get network.wan >/dev/null 2>&1; then
             uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
