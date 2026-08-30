@@ -1,11 +1,11 @@
 #!/bin/sh /etc/rc.common
-# FanchmWrt 首启安装：离线装 .apk + 在线 lists/ + 布 ADGH/OC DNS 链，完成自清理
-# 离线 .apk 须与目标内核 vermagic 匹配，否则 kmod 无法加载
+# 首启安装：离线 .apk + 在线 lists + 布 ADGH/OC DNS 链，完成自清理
+# 离线 .apk 须与内核 vermagic 匹配，否则 kmod 无法加载
 START=99
 STOP=10
 
 install_offline() {
-    # 离线 .apk：--no-network 即时装，失败重试 5 次；全部成功返回 0
+    # 离线 .apk：--no-network 装，失败重试 5 次
     [ -d /etc/firstboot-pkgs/apps ] || return 0
     local ok=1
     for f in /etc/firstboot-pkgs/apps/*.apk; do
@@ -31,7 +31,7 @@ install_offline() {
 }
 
 install_online_and_dns() {
-    # 在线包逐包装(需联网)
+    # 在线装增强包并布 DNS 链(需联网)
     local prof pkg_list pkg
     prof=$(cat /etc/firstboot-pkgs/profile 2>/dev/null)
     install_list() {
@@ -77,9 +77,7 @@ apply_dns_chain() {
         return 0
     }
 
-    # dnsmasq 上游拓扑自适应：主路由(有 wan)直连公网 DNS，并让本机 resolv.conf 回指 dnsmasq
-    # 绕开 ISP 对 github.io 等域名的污染（ADGH 拉过滤列表出向 DNS 的根因）；旁路由(无 wan)
-    # 经主路由网关出网，自身无公网出口。两态均保证 ADGH/OC 出向 DNS 可靠。
+    # 上游拓扑自适应：有 wan→公网 DNS + resolv.conf 回指 dnsmasq(绕 ISP 污染)；无 wan→经主路由网关
     add_dnsmasq_upstream() {
         if uci -q get network.wan >/dev/null 2>&1; then
             uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
@@ -94,7 +92,7 @@ apply_dns_chain() {
         fi
     }
 
-    if [ "$have_oc" = "1" ] && { [ -x /etc/init.d/openclash ] || command -v openclash >/dev/null 2>&1; }; then
+    if [ "$have_oc" = "1" ]; then
         uci -q get openclash.config.core_type >/dev/null || uci set openclash.config=openclash
         uci set openclash.config.core_type='Meta'
         uci set openclash.config.core_version='linux-amd64'
@@ -139,7 +137,11 @@ apply_dns_chain() {
                 uci set firewall.drop_lan_dns_$_z=rule
                 uci set firewall.drop_lan_dns_$_z.name="Reject LAN->$_z :53 (force router DNS)"
                 uci set firewall.drop_lan_dns_$_z.src='lan'
-                [ -n "$BYPASS_IP" ] && uci set firewall.drop_lan_dns_$_z.src_ip="!$BYPASS_IP"
+                # 旁路按地址族：wan->IPv4、wan6->IPv6，避免错配致 nft 编译失败
+                case "$BYPASS_IP" in
+                    *:*) [ "$_z" = "wan6" ] && uci set firewall.drop_lan_dns_$_z.src_ip="!$BYPASS_IP" ;;
+                    *)  [ "$_z" = "wan" ] && uci set firewall.drop_lan_dns_$_z.src_ip="!$BYPASS_IP" ;;
+                esac
                 uci set firewall.drop_lan_dns_$_z.dest="$_z"
                 uci set firewall.drop_lan_dns_$_z.dest_port='53'
                 uci set firewall.drop_lan_dns_$_z.proto='udp tcp'
@@ -158,13 +160,11 @@ apply_dns_chain() {
         uci set dhcp.@dnsmasq[0].dns_redirect='0'
         uci commit dhcp
         logger -t firstboot-pkgs "DNS 拓扑: 仅 OpenClash -> dnsmasq :53 -> OC :7874（无 ADGH/dns-hijack）"
-    else
-        logger -t firstboot-pkgs "AdGuardHome 未安装，跳过 DNS 拓扑布链（保持 dnsmasq :53 默认）"
     fi
 }
 
 wait_net() {
-    # 等公网可达(ping 或 HTTPS)
+    # 等公网可达
     local i=0
     while [ $i -lt 30 ]; do
         if ping -c1 -W2 223.5.5.5 >/dev/null 2>&1; then
@@ -172,7 +172,7 @@ wait_net() {
         fi
         # ICMP 可能被丢弃，补 HTTPS 探测
         if wget -T 4 -q -O /dev/null https://connectivitycheck.gstatic.com/generate_204 2>/dev/null \
-           || wget -T 4 -q -O /dev/null https://www.qualcomm.com/ 2>/dev/null; then
+           || wget -T 4 -q -O /dev/null https://www.qq.com/ 2>/dev/null; then
             return 0
         fi
         i=$((i + 1))
@@ -182,7 +182,7 @@ wait_net() {
 }
 
 start() {
-    # 原子锁防 uci-defaults 与 rc.d 并发(服务既 enable 又由 rc.local 触发)
+    # 原子锁防重复触发(rc.d 与 rc.local 并发)
     LOCK=/tmp/.firstboot-pkgs.lock
     (
         if mkdir "$LOCK" 2>/dev/null; then

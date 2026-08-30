@@ -11,12 +11,13 @@ dns:
     - 0.0.0.0
     - "::"
   upstream_dns:
-    - "127.0.0.1:53"          # 唯一上游：本地 dnsmasq :53 常驻兜底；OC 经 dnsmasq 层(server=127.0.0.1#7874) 注入做域名分流，ADGH 不硬依赖 OC
-  bootstrap_dns:              # ADGH 拉过滤列表/解析上游主机名时直连公网 DNS，绕开 ISP 对 github.io 等域名的污染（no addresses for host 根因）
+    - "https://dns.alidns.com/dns-query"   # 主：DoH 抗污染，拉列表/查询均走此
+    - "127.0.0.1:53"                        # 备：dnsmasq :53（含 OC :7874 分流），主 DoH 不可达回落
+  bootstrap_dns:              # 仅解析域名形式 upstream 自身；本配置 upstream 为 IP/URL，实际不参与
     - "223.5.5.5"
     - "223.6.6.6"
-  fallback_dns: []            # 兜底已并入 upstream_dns 第二条起，避免双路径重复
-  parallel_requests: false    # 仅走 dnsmasq；由 dnsmasq 决定转发 OC(:7874) 或直连公网 DNS
+  fallback_dns: []            # 主/备已覆盖
+  parallel_requests: false    # 串行：先主 DoH 再备 dnsmasq
   upstream_timeout: 3s
   cache_enabled: true
   cache_size: 500000
@@ -58,7 +59,7 @@ whitelist_filters: []
 user_rules: []
 querylog:
   enabled: true
-  # 关掉落盘查询日志：ADGH 数据目录在 overlay 闪存，长期写入会撑爆分区导致系统不稳（间歇断流）
+  # 关掉落盘查询日志：data_dir 在 overlay 闪存，长期写入撑爆分区
   file_enabled: false
   interval: 2160h
   size_memory: 1000
