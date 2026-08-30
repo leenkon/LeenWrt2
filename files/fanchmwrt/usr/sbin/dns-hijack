@@ -53,6 +53,11 @@ else
     logger -t dns-hijack "nftables DNS hijack applied (all IPv4, no exclusion)"
 fi
 
-# IPv6 明文 DNS 同劫持(br-lan 入向)
-nft add rule inet dns_hijack prerouting iifname "br-lan" meta nfproto ipv6 udp dport 53 redirect to :5353
-nft add rule inet dns_hijack prerouting iifname "br-lan" meta nfproto ipv6 tcp dport 53 redirect to :5353
+# IPv6 明文 DNS 同劫持(br-lan 入向)；BYPASS_IP 为 IPv6 时同步排除防二次劫持
+if [ -n "$BYPASS_IP" ] && [ "$BYPASS_IP" != "$LAN_IP" ] && echo "$BYPASS_IP" | grep -q ':'; then
+    nft add rule inet dns_hijack prerouting iifname "br-lan" meta nfproto ipv6 ip6 saddr != $BYPASS_IP udp dport 53 redirect to :5353
+    nft add rule inet dns_hijack prerouting iifname "br-lan" meta nfproto ipv6 ip6 saddr != $BYPASS_IP tcp dport 53 redirect to :5353
+else
+    nft add rule inet dns_hijack prerouting iifname "br-lan" meta nfproto ipv6 udp dport 53 redirect to :5353
+    nft add rule inet dns_hijack prerouting iifname "br-lan" meta nfproto ipv6 tcp dport 53 redirect to :5353
+fi

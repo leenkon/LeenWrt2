@@ -169,14 +169,21 @@ PY
     # fwx 内核模块：DPI 边界钳制（read_skb 的 kmalloc(len) 须 clamp 到 skb 尾部，
     # 否则发送方伪造 tot_len/udph->len/doff 越界，触发 FORTIFY memcpy BUG / 原子分配失败→panic/重启。
     # 与 LeenWrt 共用同一补丁；fanchmwrt 内核已导出 4 参 nf_send_reset，故无需 kmod-nf_send_reset 补丁。
+    # LeenWrt2 走分支头（fanchmwrt-${VERSION}，不可钉 SHA）→ 采用 fail-soft：
+    # 补丁能 apply 则应用；apply 不上则视为上游已自带钳制而跳过（warn），避免上游合入修复后误 abort 构建；
+    # 仅当"补丁 apply 不上且上游仍未钳制"才 error_exit（代码漂移需重新核对）。
     FWX_DIR="$OPENWRT_DIR/package/fcm/fwx"
+    FWX_SRC="$FWX_DIR/src/fwx_main.c"
     FWX_PATCH="$PROJECT_ROOT/patches/fwx/fwx-match-feature-crash.patch"
     [ -d "$FWX_DIR" ] || error_exit "未找到 fwx 内核模块源码目录: $FWX_DIR（主仓 clone 路径是否变化？）"
     if patch -p1 --dry-run -d "$FWX_DIR" < "$FWX_PATCH" >/dev/null 2>&1; then
         patch -p1 -d "$FWX_DIR" < "$FWX_PATCH"
-        echo "[diy] 已应用 fwx DPI 边界钳制补丁 -> $FWX_DIR/src/fwx_main.c"
+        echo "[diy] 已应用 fwx DPI 边界钳制补丁 -> $FWX_SRC"
+    elif grep -Eq 'skb_tail_pointer|tail - ipp|pskb_may_pull' "$FWX_SRC" 2>/dev/null; then
+        # 上游已自带 skb 边界钳制（已修复此 bug），补丁上下文不符属正常，跳过以免 abort 构建
+        echo "[diy][warn] 上游 fwx_main.c 已自带 skb 边界钳制，DPI 补丁跳过（上游已修复，自动让位）"
     else
-        error_exit "fwx DPI 边界钳制补丁上下文不符，未应用（详见 $FWX_PATCH）；fwx 版本漂移需重新核对"
+        error_exit "fwx DPI 边界钳制补丁上下文不符且上游未自带钳制（详见 $FWX_PATCH）；fwx 版本漂移需重新核对"
     fi
     ;;
 

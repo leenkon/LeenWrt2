@@ -77,6 +77,23 @@ apply_dns_chain() {
         return 0
     }
 
+    # dnsmasq 上游拓扑自适应：主路由(有 wan)直连公网 DNS，并让本机 resolv.conf 回指 dnsmasq
+    # 绕开 ISP 对 github.io 等域名的污染（ADGH 拉过滤列表出向 DNS 的根因）；旁路由(无 wan)
+    # 经主路由网关出网，自身无公网出口。两态均保证 ADGH/OC 出向 DNS 可靠。
+    add_dnsmasq_upstream() {
+        if uci -q get network.wan >/dev/null 2>&1; then
+            uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
+            uci add_list dhcp.@dnsmasq[0].server='223.6.6.6'
+            uci set network.wan.peerdns='0'
+            uci set network.wan.dns='127.0.0.1'
+            uci commit network
+            printf 'nameserver 127.0.0.1\n' > /etc/resolv.conf 2>/dev/null || true
+        else
+            local gw=$(uci -q get network.lan.gateway 2>/dev/null)
+            [ -n "$gw" ] && uci add_list dhcp.@dnsmasq[0].server="$gw"
+        fi
+    }
+
     if [ "$have_oc" = "1" ] && { [ -x /etc/init.d/openclash ] || command -v openclash >/dev/null 2>&1; }; then
         uci -q get openclash.config.core_type >/dev/null || uci set openclash.config=openclash
         uci set openclash.config.core_type='Meta'
@@ -101,8 +118,7 @@ apply_dns_chain() {
         uci -q delete dhcp.@dnsmasq[0].port
         uci -q delete dhcp.@dnsmasq[0].server
         [ "$have_oc" = "1" ] && uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#7874'
-        uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
-        uci add_list dhcp.@dnsmasq[0].server='223.6.6.6'
+        add_dnsmasq_upstream
         uci set dhcp.@dnsmasq[0].noresolv='1'
         uci set dhcp.@dnsmasq[0].rebind_protection='0'
         uci set dhcp.@dnsmasq[0].dns_redirect='0'
@@ -137,8 +153,7 @@ apply_dns_chain() {
     elif [ "$have_oc" = "1" ]; then
         uci -q delete dhcp.@dnsmasq[0].server
         uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#7874'
-        uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
-        uci add_list dhcp.@dnsmasq[0].server='223.6.6.6'
+        add_dnsmasq_upstream
         uci set dhcp.@dnsmasq[0].noresolv='1'
         uci set dhcp.@dnsmasq[0].dns_redirect='0'
         uci commit dhcp

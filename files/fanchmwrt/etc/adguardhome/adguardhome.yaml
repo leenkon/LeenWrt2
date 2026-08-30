@@ -12,6 +12,9 @@ dns:
     - "::"
   upstream_dns:
     - "127.0.0.1:53"          # 唯一上游：本地 dnsmasq :53 常驻兜底；OC 经 dnsmasq 层(server=127.0.0.1#7874) 注入做域名分流，ADGH 不硬依赖 OC
+  bootstrap_dns:              # ADGH 拉过滤列表/解析上游主机名时直连公网 DNS，绕开 ISP 对 github.io 等域名的污染（no addresses for host 根因）
+    - "223.5.5.5"
+    - "223.6.6.6"
   fallback_dns: []            # 兜底已并入 upstream_dns 第二条起，避免双路径重复
   parallel_requests: false    # 仅走 dnsmasq；由 dnsmasq 决定转发 OC(:7874) 或直连公网 DNS
   upstream_timeout: 3s
