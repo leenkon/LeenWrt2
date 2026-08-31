@@ -338,6 +338,8 @@ EOT
 # fwx 依赖 conntrack，与流卸载冲突，关闭 flow_offloading
 uci set firewall.@defaults[0].flow_offloading='0'
 uci set firewall.@defaults[0].flow_offloading_hw='0'
+# FullCone：需 kmod-nft-fullcone(见 fanchmwrt-lean.config)；fw4 探测不到该表达式会自动回退 masquerade
+uci set firewall.@defaults[0].fullcone='1'
 uci commit firewall
 
 uci set system.@system[0].hostname='LeenWrt'
