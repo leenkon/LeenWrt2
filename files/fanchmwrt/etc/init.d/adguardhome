@@ -14,11 +14,7 @@ boot() {
 	start "$@"
 }
 
-# dnsmasq 上游由独立常驻服务 dns-balance 经 /usr/sbin/dns-upstream 自愈合管理(与 ADGH 生命周期解耦)。
-# 此处仅在 ADGH 启停时做一次静态设置；实际监听态探活/变化重排由 dns-balance 负责。
-setup_dnsmasq() {
-	/usr/sbin/dns-upstream
-}
+# dnsmasq 上游由独立常驻服务 dns-balance 全权管理(与 ADGH 生命周期解耦)，本脚本不触碰上游。
 
 start_service() {
 	# 开机先不启动，等接口 up 再拉起(网络未就绪会解析失败)
@@ -32,11 +28,8 @@ start_service() {
 	# 二进制缺失：不抢占 :53，回退 dnsmasq 防断网
 	if [ ! -x "$PROG" ]; then
 		logger -t adguardhome "AdGuardHome 未安装，回退 dnsmasq :53（不布劫持）"
-		setup_dnsmasq
 		return 1
 	fi
-
-	setup_dnsmasq
 
 	mkdir -m 0700 -p /etc/adguardhome/data
 
@@ -55,11 +48,10 @@ start_service() {
 	[ -x /usr/sbin/dns-hijack ] && /usr/sbin/dns-hijack
 }
 
-# 停止即自愈：清劫持表回退 dnsmasq(零抖动)；常驻自愈合由 dns-balance 继续负责
+# 停止即清劫持表(零抖动)；dnsmasq 上游由 dns-balance 继续自愈合管理
 stop_service() {
 	nft delete table inet dns_hijack 2>/dev/null
-	setup_dnsmasq
-	logger -t adguardhome "ADGH 停止/卸载：已清除劫持并回退 dnsmasq :53（自愈防断网）"
+	logger -t adguardhome "ADGH 停止/卸载：已清除劫持（上游由 dns-balance 自愈合）"
 }
 
 service_triggers() {
