@@ -98,28 +98,37 @@ ruby)
 
 themes)
     # 须在 feeds update -a 之后运行：fanchmwrt 主题在克隆仓内(非独立 feed)，glob 定位；argon/bootstrap 在 feeds/luci。
-    # 标题覆盖为 LuCI 动态标题({{ hostname }})；fanchmwrt footer 剥离保留 #modemenu(菜单依赖)，argon/bootstrap 移除整段 footer。
+    # 所有主题统一处理：
+    #  1) 标题改为 LuCI 合法 <% %> Lua 表达式（原 {{ }} 是 JS 模板语法，LuCI .ut 不解析 → 浏览器显示字面量 {{主机名}}）。
+    #  2) footer 不删除：删除会让 argon 的 menu-argon.js renderModeMenu() 往已消失的 #modemenu 节点 appendChild →
+    #     TypeError(null) → render() 抛错 → 整条侧边栏不渲染。改为在 <head> 注入 CSS 隐藏 footer：
+    #     DOM 仍在 → JS 不崩 → 导航栏保留；footer 信息视觉移除（所有主题统一，含装 OAF 时的 argon）。
     echo "[diy] themes: 处理 fanchmwrt/argon/bootstrap 主题标题与 footer"
     OPENWRT_DIR="$PROJECT_ROOT/openwrt"
     python3 - "$OPENWRT_DIR" <<'PY'
 import sys, os, re, glob
 openwrt = sys.argv[1]
 
-def strip_footer(path, keep_inner):
+# LuCI .ut 用 Lua 模板：boardinfo.hostname / node.title 均为模板上下文变量；striptags 为内置函数。
+TITLE_NEW = "<title><%= striptags((boardinfo.hostname or '?') .. (node and ' - ' .. node.title or '')) %> - LuCI</title>"
+# 隐藏 footer 但保留 DOM（#modemenu 仍在，menu-argon.js 不崩）；id 便于重复构建去重。
+HIDE_CSS = '<style id="leenwrt-hide-footer">footer{display:none!important}</style>'
+
+def fix_header(path):
     s0 = open(path, encoding='utf-8').read()
-    if keep_inner:
-        # fanchmwrt：保留 #modemenu 挂载点（顶部菜单脚本依赖，常包在 footer 内）。
-        # 仅剥纯文本 span（不含任何子标签），避免误删含 #modemenu 的结构化 span；再摘 footer 标签。
-        s = re.sub(r'<span>(?:(?!</?span>|<[a-zA-Z!/]).)*?</span>\s*', '', s0, flags=re.S)
-        s = re.sub(r'</?footer>', '', s)
-    else:
-        # argon / bootstrap：移除整个 <footer> 区域
-        s = re.sub(r'<footer\b.*?</footer>', '', s0, flags=re.S)
-    s = re.sub(r'\n[ \t]*\n[ \t]*\n', '\n\n', s)
+    s = s0
+    # 标题：容忍 <title ...> 属性，替换为合法 Lua 表达式
+    s, n = re.subn(r'<title[^>]*>.*?</title>', TITLE_NEW, s, count=1, flags=re.S)
+    if n and HIDE_CSS not in s:
+        # 紧跟 </title> 之后注入（位于 <head> 内），不依赖 </head> 是否存在
+        s = s.replace(TITLE_NEW, TITLE_NEW + "\n    " + HIDE_CSS, 1)
     if s != s0:
         open(path, 'w', encoding='utf-8').write(s)
-        return True
-    return False
+        print("[diy] 标题+footer隐藏已应用: " + path)
+    elif n:
+        print("[diy] 标题已替换，footer CSS 已存在(无变更): " + path)
+    else:
+        print("[diy] 未在 header.ut 找到 <title>: " + path)
 
 theme_dirs = set()
 for p in glob.glob(os.path.join(openwrt, '**', 'luci-theme-*'), recursive=True):
@@ -128,30 +137,8 @@ for p in glob.glob(os.path.join(openwrt, '**', 'luci-theme-*'), recursive=True):
 
 for d in sorted(theme_dirs):
     name = os.path.basename(d)
-    if name == 'luci-theme-fanchmwrt':
-        # fanchmwrt：标题覆盖为 LuCI 动态标题
-        for h in glob.glob(os.path.join(d, '**', 'header.ut'), recursive=True):
-            s0 = open(h, encoding='utf-8').read()
-            new = "<title>{{ striptags(`${boardinfo.hostname ?? '?'}${node ? ` - ${node.title}` : ''}`) }} - LuCI</title>"
-            m = re.sub(r'<title>.*?</title>', new, s0, count=1, flags=re.S)
-            if m != s0:
-                open(h, 'w', encoding='utf-8').write(m)
-                print("[diy] 主题标题已覆盖为 {{ hostname }}: " + h)
-            else:
-                print("[diy] 未在 header.ut 找到 <title>: " + h)
-        # fanchmwrt：移除 footer（保留 #modemenu）
-        for f in glob.glob(os.path.join(d, '**', 'footer.ut'), recursive=True):
-            if strip_footer(f, keep_inner=True):
-                print("[diy] 已移除 fanchmwrt footer（保留 #modemenu）: " + f)
-            else:
-                print("[diy] fanchmwrt footer 无变化: " + f)
-    else:
-        # argon / bootstrap：移除整个 footer
-        for f in glob.glob(os.path.join(d, '**', 'footer.ut'), recursive=True):
-            if strip_footer(f, keep_inner=False):
-                print("[diy] 已移除 " + name + " footer: " + f)
-            else:
-                print("[diy] " + name + " footer 无变化: " + f)
+    for h in glob.glob(os.path.join(d, '**', 'header.ut'), recursive=True):
+        fix_header(h)
 PY
 
     # fwxd：修复 dashboard 联网状态误报（DNS 劫持/ADGH 未就绪时 www.baidu.com 解析失败）
