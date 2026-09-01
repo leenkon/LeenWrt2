@@ -211,7 +211,7 @@ if ! uci -q get network.loopback >/dev/null 2>&1; then
 fi
 EOF
 
-    # 端口：主路由 WAN 锁 eth1（见下方 main 段）；旁路由不建 WAN，全口桥接 LAN
+    # 端口：主路由 WAN 锁 eth1（else 分支）；旁路由不建 WAN，全口桥接 LAN
 
     if [ "$PROFILE_TYPE" = "bypass" ]; then
         gw_esc=$(_escape_uci "$CUSTOM_GATEWAY")
@@ -376,7 +376,7 @@ EOT
         chmod 600 "$SHADOW" 2>/dev/null || true
     fi
     ;;
-*) error_exit "PHASE仅支持 before / after / ruby" ;;
+*) error_exit "PHASE仅支持 before / after / ruby / themes" ;;
 esac
 
 echo "[diy] done: $PHASE ${PROFILE_TYPE:-N/A}"
