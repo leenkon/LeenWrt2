@@ -31,7 +31,7 @@ install_offline() {
 }
 
 install_online_and_dns() {
-	# 在线装增强包并布 ADGH/OC 配置(需联网)；dnsmasq 上游与劫持表由 dns-balance 常驻自愈合
+	# 在线装增强包并布 ADGH/OC 配置(需联网)
 	local prof pkg_list pkg
 	prof=$(cat /etc/firstboot-pkgs/profile 2>/dev/null)
 	install_list() {
@@ -65,7 +65,7 @@ install_online_and_dns() {
 	logger -t firstboot-pkgs "首启安装完成，已自清理"
 }
 
-# 首启布 ADGH/OC 配置与劫持开关；dnsmasq 上游(server/peerdns/resolv.conf)与劫持表由 dns-balance 常驻自愈合
+# 首启布 ADGH/OC 配置与劫持开关（上游由 dns-balance 管理）
 apply_dns_chain() {
 	local prof="$1"
 	local have_adgh=0 have_oc=0
