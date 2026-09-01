@@ -9,39 +9,15 @@ USE_PROCD=1
 
 PROG=/usr/bin/AdGuardHome
 
-# OC 是否在 :7874 真监听(端口 7874=0x1EC2；读 /proc/net/tcp 免 ss/netstat 本机缺失)
-oc_listening() {
-	[ -x /etc/init.d/openclash ] && grep -qi ':1ec2 ' /proc/net/tcp /proc/net/tcp6 2>/dev/null
-}
-
 boot() {
 	ADGUARDHOME_BOOT=1
 	start "$@"
 }
 
-# dnsmasq 常驻 :53 兜底：ADGH 宕则清劫持回退 dnsmasq(零抖动)。
-# OC 仅实测监听 :7874 才前置走分流；装了未跑→不前置(防死端口拖慢每查询 ~6s)；全空按拓扑兜底
+# dnsmasq 上游由独立常驻服务 dns-balance 经 /usr/sbin/dns-upstream 自愈合管理(与 ADGH 生命周期解耦)。
+# 此处仅在 ADGH 启停时做一次静态设置；实际监听态探活/变化重排由 dns-balance 负责。
 setup_dnsmasq() {
-	uci -q delete dhcp.@dnsmasq[0].port
-	uci set dhcp.@dnsmasq[0].noresolv='1'
-	uci set dhcp.@dnsmasq[0].dns_redirect='0'
-
-	_oc=""; oc_listening && _oc='127.0.0.1#7874'   # 仅 OC 实测监听 :7874 才前置(防死端口)
-	_tail=""
-	for s in $(uci -q get dhcp.@dnsmasq[0].server); do
-		# 丢弃陈旧 7874(OC 已停监听) 与即将前置的 7874，仅保留其它上游
-		[ "$s" = "127.0.0.1#7874" ] && continue
-		_tail="$_tail $s"
-	done
-	# OC 之外无上游时按拓扑补：有 WAN 直连公网，无 WAN(旁路由) 走 lan 网关
-	if [ -z "$_tail" ]; then
-		uci -q get network.wan >/dev/null && _tail='223.5.5.5 223.6.6.6' || _tail=$(uci -q get network.lan.gateway)
-	fi
-	uci -q delete dhcp.@dnsmasq[0].server
-	for s in $_oc $_tail; do uci add_list dhcp.@dnsmasq[0].server="$s"; done
-
-	uci commit dhcp
-	/etc/init.d/dnsmasq restart 2>/dev/null
+	/usr/sbin/dns-upstream
 }
 
 start_service() {
@@ -75,26 +51,12 @@ start_service() {
 	procd_set_param respawn
 	procd_close_instance
 
-	# 劫持监控 + OC(:7874) 监听态自愈合：仅状态变化才重排 dnsmasq 上游(防每轮重启抖动)
-	local dhijack
-	config_get_bool dhijack config dns_hijack 1
-	if [ "$dhijack" = "1" ] && [ -x /usr/sbin/dns-hijack ]; then
-		pkill -f "/usr/sbin/dns-hijack" 2>/dev/null   # 防重复循环
-		(
-			_oc_prev=""; oc_listening && _oc_prev=1
-			while true; do
-				/usr/sbin/dns-hijack
-				_oc_now=""; oc_listening && _oc_now=1
-				[ "$_oc_now" != "$_oc_prev" ] && { setup_dnsmasq; _oc_prev="$_oc_now"; }
-				sleep 5
-			done
-		) &
-	fi
+	# 立即布劫持表；常驻自愈合(ADGH:5353 / OC:7874 监听态)由独立服务 dns-balance 负责
+	[ -x /usr/sbin/dns-hijack ] && /usr/sbin/dns-hijack
 }
 
-# 停止即自愈：停监控 + 清劫持表回退 dnsmasq(零抖动)
+# 停止即自愈：清劫持表回退 dnsmasq(零抖动)；常驻自愈合由 dns-balance 继续负责
 stop_service() {
-	pkill -f "/usr/sbin/dns-hijack" 2>/dev/null   # 停监控循环及任何残留 dns-hijack 调用
 	nft delete table inet dns_hijack 2>/dev/null
 	setup_dnsmasq
 	logger -t adguardhome "ADGH 停止/卸载：已清除劫持并回退 dnsmasq :53（自愈防断网）"

@@ -1,0 +1,20 @@
+#!/bin/sh /etc/rc.common
+# 独立常驻 DNS 自愈合：与 ADGH/OC 生命周期解耦，每 5s 探 ADGH(:5353) 与 OC(:7874) 真实监听态，
+# 仅状态变化时分别重建劫持表(/usr/sbin/dns-hijack) 与重排 dnsmasq 上游(/usr/sbin/dns-upstream)。
+# 覆盖 ADGH 装/卸/崩 与 OC 装/卸/启停 的全部组合；两脚本均幂等。
+USE_PROCD=1
+START=20
+STOP=80
+
+start_service() {
+	procd_open_instance dns-balance
+	procd_set_param command /bin/sh -c "while true; do /usr/sbin/dns-hijack; /usr/sbin/dns-upstream; sleep 5; done"
+	procd_set_param respawn
+	procd_close_instance
+}
+
+# 停止即清劫持回退 dnsmasq(由 dns-upstream 处理上游)
+stop_service() {
+	/usr/sbin/dns-hijack 2>/dev/null
+	/usr/sbin/dns-upstream 2>/dev/null
+}

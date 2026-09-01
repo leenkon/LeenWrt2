@@ -82,6 +82,9 @@ apply_dns_chain() {
         return 0
     }
 
+    # 独立常驻 DNS 自愈合服务(与 ADGH 生命周期解耦，覆盖 ADGH/OC 全部组合)
+    [ -x /etc/init.d/dns-balance ] && /etc/init.d/dns-balance enable 2>/dev/null
+
     # 上游拓扑自适应：有 wan→公网 DNS + resolv.conf 回指 dnsmasq(绕 ISP 污染)；无 wan→经主路由网关
     # OC(:7874) 前置仅实测监听时写入(防装未起死端口); 随 OC 起停的完整自愈合由 adguardhome init.d 的 setup_dnsmasq 监控循环负责
     add_dnsmasq_upstream() {

@@ -1,0 +1,39 @@
+#!/bin/sh
+# 按 OC(:7874) 实际监听态与网络拓扑设置 dnsmasq 上游；与 ADGH 生命周期解耦。
+# 幂等：仅当上游列表变化才重写并 restart dnsmasq。供 dns-balance 常驻监控与 adguardhome init.d 共用。
+# OC 端口 7874=0x1EC2；读 /proc/net/tcp 探活(免 ss/netstat 本机缺失)。
+
+oc_listening() {
+	[ -x /etc/init.d/openclash ] && grep -qi ':1ec2 ' /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+
+cur=$(uci -q get dhcp.@dnsmasq[0].server)
+
+_oc=""; oc_listening && _oc='127.0.0.1#7874'
+_desired=""
+for s in $cur; do
+	[ "$s" = "127.0.0.1#7874" ] && continue   # 丢弃陈旧 7874(OC 已停) 与即将前置的 7874
+	_desired="$_desired $s"
+done
+# 无其它上游时按拓扑补：有 WAN 直连公网；无 WAN(旁路由) 走 lan 网关
+if [ -z "$_desired" ]; then
+	if uci -q get network.wan >/dev/null 2>&1; then
+		_desired='223.5.5.5 223.6.6.6'
+	else
+		_desired=$(uci -q get network.lan.gateway)
+	fi
+fi
+_desired=$(echo "$_oc $_desired" | tr -s ' ' | sed 's/^ //; s/ $//')
+
+# 与当前一致则不动(避免每轮 restart 抖动)
+[ "$cur" = "$_desired" ] && exit 0
+
+uci -q delete dhcp.@dnsmasq[0].port
+uci set dhcp.@dnsmasq[0].noresolv='1'
+uci set dhcp.@dnsmasq[0].dns_redirect='0'
+uci -q delete dhcp.@dnsmasq[0].server
+for s in $_desired; do
+	[ -n "$s" ] && uci add_list dhcp.@dnsmasq[0].server="$s"
+done
+uci commit dhcp
+/etc/init.d/dnsmasq restart 2>/dev/null
