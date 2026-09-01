@@ -1,6 +1,7 @@
 #!/bin/sh
 # 仅 ADGH 监听 :5353 时生效：把 LAN 明文 :53 重定向到本机 :5353；否则清表回退 dnsmasq :53(零抖动)。
 # priority -150 早于 firewall4 dstnat(-100)；仅 br-lan 入向避开回环(否则 ADGH 上游 127.0.0.1:53 被重定向成死循环)。
+# ADGH 须双栈监听(yaml bind_hosts: 0.0.0.0 + ::)；仅 v4 时 IPv6 劫持报文落到 :5353 无监听会 refused。
 # dns_hijack_bypass_ip 空=全量劫持；双路由主路由填对端旁路由 IP 排除二次劫持。
 if ! command -v nft >/dev/null 2>&1; then
     logger -t dns-hijack "ERROR: nft not found"

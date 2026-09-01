@@ -108,8 +108,9 @@ openwrt = sys.argv[1]
 def strip_footer(path, keep_inner):
     s0 = open(path, encoding='utf-8').read()
     if keep_inner:
-        # fanchmwrt：保留 #modemenu 挂载点（顶部菜单脚本依赖），仅剥离 <span> 文案与 footer 标签
-        s = re.sub(r'<span>.*?</span>\s*', '', s0, flags=re.S)
+        # fanchmwrt：保留 #modemenu 挂载点（顶部菜单脚本依赖，常包在 footer 内）。
+        # 仅剥纯文本 span（不含任何子标签），避免误删含 #modemenu 的结构化 span；再摘 footer 标签。
+        s = re.sub(r'<span>(?:(?!</?span>|<[a-zA-Z!/]).)*?</span>\s*', '', s0, flags=re.S)
         s = re.sub(r'</?footer>', '', s)
     else:
         # argon / bootstrap：移除整个 <footer> 区域
