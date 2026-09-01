@@ -71,7 +71,7 @@ jobs:
           $GITHUB_WORKSPACE/scripts/diy.sh -v $MAIN_VER -p before -t $RUN_TYPE --core fanchmwrt --feeds "$FEEDS_FILE_ABS"
           ./scripts/feeds update -a
 
-          # 主题标题/footer 处理（feeds update 后）：fanchmwrt 标题→{{hostname}}、剥离 footer 保留 #modemenu（修复标题非主机名+菜单消失）
+          # 主题标题改写/footer 隐藏（feeds update 后）：标题改 LuCI Lua 表达式（修 {{hostname}} 不渲染）；footer 保留 DOM 仅隐藏（修 argon 删 footer 致侧边栏消失）
           $GITHUB_WORKSPACE/scripts/diy.sh -v $MAIN_VER -p themes -t $RUN_TYPE --core fanchmwrt
 
           # ruby YJIT 解耦（openclash=true 时）：feeds update 后、install 前
