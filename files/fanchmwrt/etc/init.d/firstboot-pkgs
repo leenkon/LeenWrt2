@@ -4,6 +4,11 @@
 START=99
 STOP=10
 
+# OC 是否在 :7874 真监听(端口 7874=0x1EC2；读 /proc/net/tcp 免 ss/netstat 本机缺失)
+oc_listening() {
+	[ -x /etc/init.d/openclash ] && grep -qi ':1ec2 ' /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+
 install_offline() {
     # 离线 .apk：--no-network 装，失败重试 5 次
     [ -d /etc/firstboot-pkgs/apps ] || return 0
@@ -116,8 +121,8 @@ apply_dns_chain() {
     if [ -x /usr/bin/AdGuardHome ]; then
         uci -q delete dhcp.@dnsmasq[0].port
         uci -q delete dhcp.@dnsmasq[0].server
-        # OC(:7874) 仅实测监听前置(防装未起拖慢 dnsmasq；完整自愈合由 adguardhome setup_dnsmasq 接手)
-        [ "$have_oc" = "1" ] && grep -qi ':1ec2 ' /proc/net/tcp /proc/net/tcp6 2>/dev/null \
+        # OC(:7874) 仅实测监听前置(防装未起拖慢 dnsmasq；自愈合由 adguardhome 监控循环负责)
+        [ "$have_oc" = "1" ] && oc_listening \
             && uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#7874'
         add_dnsmasq_upstream
         uci set dhcp.@dnsmasq[0].noresolv='1'
@@ -158,8 +163,7 @@ apply_dns_chain() {
     elif [ "$have_oc" = "1" ]; then
         uci -q delete dhcp.@dnsmasq[0].server
         # OC(:7874) 仅实测监听前置(无 ADGH 时此处即最终链路，更须防死端口)
-        grep -qi ':1ec2 ' /proc/net/tcp /proc/net/tcp6 2>/dev/null \
-            && uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#7874'
+        oc_listening && uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#7874'
         add_dnsmasq_upstream
         uci set dhcp.@dnsmasq[0].noresolv='1'
         uci set dhcp.@dnsmasq[0].dns_redirect='0'

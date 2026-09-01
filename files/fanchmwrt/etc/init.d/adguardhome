@@ -9,22 +9,24 @@ USE_PROCD=1
 
 PROG=/usr/bin/AdGuardHome
 
+# OC 是否在 :7874 真监听(端口 7874=0x1EC2；读 /proc/net/tcp 免 ss/netstat 本机缺失)
+oc_listening() {
+	[ -x /etc/init.d/openclash ] && grep -qi ':1ec2 ' /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+
 boot() {
 	ADGUARDHOME_BOOT=1
 	start "$@"
 }
 
-# dnsmasq 常驻 :53 兜底：ADGH 宕则清劫持表、LAN 直落 dnsmasq(零抖动)
-# 上游自愈+自适应：OC 实际在 :7874 监听才前置走分流（端口 7874=0x1EC2，读 /proc/net/tcp 探活，免 ss/netstat 本机缺失）；
-# 仅看 init.d 文件存在会误判——OC 装了没跑→死端口拖慢 dnsmasq 每查询 ~6s。保留构建期上游；全空按拓扑兜底（无上游则全部查询 REFUSED）
+# dnsmasq 常驻 :53 兜底：ADGH 宕则清劫持回退 dnsmasq(零抖动)。
+# OC 仅实测监听 :7874 才前置走分流；装了未跑→不前置(防死端口拖慢每查询 ~6s)；全空按拓扑兜底
 setup_dnsmasq() {
 	uci -q delete dhcp.@dnsmasq[0].port
 	uci set dhcp.@dnsmasq[0].noresolv='1'
 	uci set dhcp.@dnsmasq[0].dns_redirect='0'
 
-	# OC 仅在 :7874 真监听时前置；装了未起→不前置(防死端口)
-	_oc=""
-	[ -x /etc/init.d/openclash ] && grep -qi ':1ec2 ' /proc/net/tcp /proc/net/tcp6 2>/dev/null && _oc='127.0.0.1#7874'
+	_oc=""; oc_listening && _oc='127.0.0.1#7874'   # 仅 OC 实测监听 :7874 才前置(防死端口)
 	_tail=""
 	for s in $(uci -q get dhcp.@dnsmasq[0].server); do
 		# 丢弃陈旧 7874(OC 已停监听) 与即将前置的 7874，仅保留其它上游
@@ -73,21 +75,16 @@ start_service() {
 	procd_set_param respawn
 	procd_close_instance
 
-	# 零抖动监控：ADGH 监听即布表、失联即清表回退 dnsmasq；
-	# 顺带探 OC(:7874) 监听态自愈合——OC 起/停时仅状态变化才重排 dnsmasq 上游(防每轮重启抖动)
+	# 劫持监控 + OC(:7874) 监听态自愈合：仅状态变化才重排 dnsmasq 上游(防每轮重启抖动)
 	local dhijack
 	config_get_bool dhijack config dns_hijack 1
 	if [ "$dhijack" = "1" ] && [ -x /usr/sbin/dns-hijack ]; then
 		pkill -f "/usr/sbin/dns-hijack" 2>/dev/null   # 防重复循环
 		(
-			_oc_prev=""
-			[ -x /etc/init.d/openclash ] && grep -qi ':1ec2 ' /proc/net/tcp /proc/net/tcp6 2>/dev/null && _oc_prev=1
+			_oc_prev=""; oc_listening && _oc_prev=1
 			while true; do
 				/usr/sbin/dns-hijack
-				# OC 实际在 :7874 监听?
-				_oc_now=""
-				[ -x /etc/init.d/openclash ] && grep -qi ':1ec2 ' /proc/net/tcp /proc/net/tcp6 2>/dev/null && _oc_now=1
-				# 仅监听态变化才重排 dnsmasq 上游(防每轮重启抖动)
+				_oc_now=""; oc_listening && _oc_now=1
 				[ "$_oc_now" != "$_oc_prev" ] && { setup_dnsmasq; _oc_prev="$_oc_now"; }
 				sleep 5
 			done
