@@ -82,7 +82,7 @@ before)
 
 ruby)
     # ruby YJIT 解耦：分支头 lang/ruby 默认 RUBY_ENABLE_YJIT=y -> 拉 rust/host -> rustc LLVM 404 构建挂。
-    # OpenClash 依赖 ruby(不可选)，故仅在 WITH_OC 时由 build.sh/workflow 调用。须 feeds update 后、install 前执行。
+    # OpenClash 依赖 ruby(不可选)，故仅在 WITH_OC 时由 workflow 调用。须 feeds update 后、install 前执行。
     echo "[diy] ruby: 解耦 YJIT 与 rust/host（x86_64/aarch64）"
     RUBY_DIR="$PROJECT_ROOT/openwrt/feeds/packages/lang/ruby"
     if [ -d "$RUBY_DIR" ]; then
