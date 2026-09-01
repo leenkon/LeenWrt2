@@ -1,215 +1,172 @@
 #!/bin/sh /etc/rc.common
-# 首启安装：离线 .apk + 在线 lists + 布 ADGH/OC DNS 链，完成自清理
+# 首启安装：离线 .apk + 在线 lists + 布 ADGH/OC 配置，完成自清理
 # 离线 .apk 须与内核 vermagic 匹配，否则 kmod 无法加载
 START=99
 STOP=10
 
-# OC 是否在 :7874 真监听(端口 7874=0x1EC2；读 /proc/net/tcp 免 ss/netstat 本机缺失)
-oc_listening() {
-	[ -x /etc/init.d/openclash ] && grep -qi ':1ec2 ' /proc/net/tcp /proc/net/tcp6 2>/dev/null
-}
-
 install_offline() {
-    # 离线 .apk：--no-network 装，失败重试 5 次
-    [ -d /etc/firstboot-pkgs/apps ] || return 0
-    local ok=1
-    for f in /etc/firstboot-pkgs/apps/*.apk; do
-        [ -f "$f" ] || continue
-        local _i _rc=1 _log=/tmp/.firstboot-pkgs.log
-        for _i in 1 2 3 4 5; do
-            apk --allow-untrusted --no-network add "$f" >"$_log" 2>&1
-            _rc=$?
-            [ $_rc -eq 0 ] && break
-            logger -t firstboot-pkgs "离线安装 $f 第 $_i 次失败(rc=$_rc): $(tail -2 "$_log" 2>/dev/null)"
-            sleep 5
-        done
-        rm -f "$_log"
-        if [ $_rc -eq 0 ]; then
-            rm -f "$f"
-            logger -t firstboot-pkgs "离线安装完成: $f"
-        else
-            logger -t firstboot-pkgs "离线安装失败(保留待查): $f"
-            ok=0
-        fi
-    done
-    [ $ok -eq 1 ] && return 0 || return 1
+	# 离线 .apk：--no-network 装，失败重试 5 次
+	[ -d /etc/firstboot-pkgs/apps ] || return 0
+	local ok=1
+	for f in /etc/firstboot-pkgs/apps/*.apk; do
+		[ -f "$f" ] || continue
+		local _i _rc=1 _log=/tmp/.firstboot-pkgs.log
+		for _i in 1 2 3 4 5; do
+			apk --allow-untrusted --no-network add "$f" >"$_log" 2>&1
+			_rc=$?
+			[ $_rc -eq 0 ] && break
+			logger -t firstboot-pkgs "离线安装 $f 第 $_i 次失败(rc=$_rc): $(tail -2 "$_log" 2>/dev/null)"
+			sleep 5
+		done
+		rm -f "$_log"
+		if [ $_rc -eq 0 ]; then
+			rm -f "$f"
+			logger -t firstboot-pkgs "离线安装完成: $f"
+		else
+			logger -t firstboot-pkgs "离线安装失败(保留待查): $f"
+			ok=0
+		fi
+	done
+	[ $ok -eq 1 ] && return 0 || return 1
 }
 
 install_online_and_dns() {
-    # 在线装增强包并布 DNS 链(需联网)
-    local prof pkg_list pkg
-    prof=$(cat /etc/firstboot-pkgs/profile 2>/dev/null)
-    install_list() {
-        [ -f "$1" ] || return 0
-        pkg_list=$(grep -v '^#' "$1" | grep -v '^$')
-        for pkg in $pkg_list; do
-            if apk add "$pkg" >/dev/null 2>&1; then
-                logger -t firstboot-pkgs "已安装: $pkg"
-            else
-                logger -t firstboot-pkgs "安装失败(跳过): $pkg"
-            fi
-        done
-    }
-    if ! apk update >/dev/null 2>&1; then
-        logger -t firstboot-pkgs "apk update 失败：跳过在线安装（检查 /etc/apk/repositories 与联网）"
-    else
-        install_list /etc/firstboot-pkgs/lists/common.txt
-        [ "$prof" != "mini" ] && install_list /etc/firstboot-pkgs/lists/default.txt
-    fi
+	# 在线装增强包并布 ADGH/OC 配置(需联网)；dnsmasq 上游与劫持表由 dns-balance 常驻自愈合
+	local prof pkg_list pkg
+	prof=$(cat /etc/firstboot-pkgs/profile 2>/dev/null)
+	install_list() {
+		[ -f "$1" ] || return 0
+		pkg_list=$(grep -v '^#' "$1" | grep -v '^$')
+		for pkg in $pkg_list; do
+			if apk add "$pkg" >/dev/null 2>&1; then
+				logger -t firstboot-pkgs "已安装: $pkg"
+			else
+				logger -t firstboot-pkgs "安装失败(跳过): $pkg"
+			fi
+		done
+	}
+	if ! apk update >/dev/null 2>&1; then
+		logger -t firstboot-pkgs "apk update 失败：跳过在线安装（检查 /etc/apk/repositories 与联网）"
+	else
+		install_list /etc/firstboot-pkgs/lists/common.txt
+		[ "$prof" != "mini" ] && install_list /etc/firstboot-pkgs/lists/default.txt
+	fi
 
-    # DNS 链不依赖 apk update 成败
-    apply_dns_chain "$prof"
+	# DNS 链不依赖 apk update 成败
+	apply_dns_chain "$prof"
 
-    # 重启 Web 以加载新装 luci-app
-    [ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd restart 2>/dev/null
-    [ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd restart 2>/dev/null
+	# 重启 Web 以加载新装 luci-app
+	[ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd restart 2>/dev/null
+	[ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd restart 2>/dev/null
 
-    /etc/init.d/firstboot-pkgs disable 2>/dev/null
-    rm -f /etc/init.d/firstboot-pkgs
-    rm -rf /etc/firstboot-pkgs
-    logger -t firstboot-pkgs "首启安装完成，已自清理"
+	/etc/init.d/firstboot-pkgs disable 2>/dev/null
+	rm -f /etc/init.d/firstboot-pkgs
+	rm -rf /etc/firstboot-pkgs
+	logger -t firstboot-pkgs "首启安装完成，已自清理"
 }
 
-# 首启布 DNS 链：dnsmasq :53 兜底，ADGH :5353 受劫持，OC 前置 :7874
+# 首启布 ADGH/OC 配置与劫持开关；dnsmasq 上游(server/peerdns/resolv.conf)与劫持表由 dns-balance 常驻自愈合
 apply_dns_chain() {
-    local prof="$1"
-    local have_adgh=0 have_oc=0
+	local prof="$1"
+	local have_adgh=0 have_oc=0
 
-    [ -x /usr/bin/AdGuardHome ] && have_adgh=1
-    [ -x /etc/init.d/openclash ] && have_oc=1
-    [ "$have_adgh" = "0" ] && [ "$have_oc" = "0" ] && {
-        logger -t firstboot-pkgs "未装 ADGH/OC，DNS 保持默认（dnsmasq :53）"
-        return 0
-    }
+	[ -x /usr/bin/AdGuardHome ] && have_adgh=1
+	[ -x /etc/init.d/openclash ] && have_oc=1
+	[ "$have_adgh" = "0" ] && [ "$have_oc" = "0" ] && {
+		logger -t firstboot-pkgs "未装 ADGH/OC，DNS 维持默认（dnsmasq :53）"
+		return 0
+	}
 
-    # 独立常驻 DNS 自愈合服务(与 ADGH 生命周期解耦，覆盖 ADGH/OC 全部组合)
-    [ -x /etc/init.d/dns-balance ] && /etc/init.d/dns-balance enable 2>/dev/null
+	# dns-balance 常驻自愈合(ADGH:5353 / OC:7874 监听态)，全权管理 dnsmasq 上游与劫持表
+	[ -x /etc/init.d/dns-balance ] && /etc/init.d/dns-balance enable 2>/dev/null
 
-    # 上游拓扑自适应：有 wan→公网 DNS + resolv.conf 回指 dnsmasq(绕 ISP 污染)；无 wan→经主路由网关
-    # OC(:7874) 前置仅实测监听时写入(防装未起死端口)；OC 起停自愈合由 dns-balance 负责
-    add_dnsmasq_upstream() {
-        if uci -q get network.wan >/dev/null 2>&1; then
-            uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
-            uci add_list dhcp.@dnsmasq[0].server='223.6.6.6'
-            uci set network.wan.peerdns='0'
-            uci set network.wan.dns='127.0.0.1'
-            uci commit network
-            printf 'nameserver 127.0.0.1\n' > /etc/resolv.conf 2>/dev/null || true
-        else
-            local gw=$(uci -q get network.lan.gateway 2>/dev/null)
-            [ -n "$gw" ] && uci add_list dhcp.@dnsmasq[0].server="$gw"
-        fi
-    }
+	if [ "$have_oc" = "1" ]; then
+		uci -q get openclash.config.core_type >/dev/null || uci set openclash.config=openclash
+		uci set openclash.config.core_type='Meta'
+		uci set openclash.config.core_version='linux-amd64'
+		uci set openclash.config.enable_redirect_dns='0'
+		uci set openclash.config.en_mode='redir-host'
+		uci set openclash.config.operation_mode='redir-host'
+		uci set openclash.config.enable_custom_overwrite='1'
+		uci commit openclash
+		/etc/init.d/openclash enable 2>/dev/null
+		logger -t firstboot-pkgs "OpenClash 已配置并启用（:7874 上游由 dns-balance 自愈合接管）"
+	fi
 
-    if [ "$have_oc" = "1" ]; then
-        uci -q get openclash.config.core_type >/dev/null || uci set openclash.config=openclash
-        uci set openclash.config.core_type='Meta'
-        uci set openclash.config.core_version='linux-amd64'
-        uci set openclash.config.enable_redirect_dns='0'
-        uci set openclash.config.en_mode='redir-host'
-        uci set openclash.config.operation_mode='redir-host'
-        uci set openclash.config.enable_custom_overwrite='1'
-        uci commit openclash
-        /etc/init.d/openclash enable 2>/dev/null
-        logger -t firstboot-pkgs "OpenClash 已配置并启用"
-    fi
+	if [ "$have_adgh" = "1" ] && [ -x /etc/init.d/adguardhome ]; then
+		uci set adguardhome.config.enabled='1' 2>/dev/null
+		/etc/init.d/adguardhome enable 2>/dev/null
+		/etc/init.d/adguardhome start 2>/dev/null
+		logger -t firstboot-pkgs "AdGuardHome 已启用并启动"
+	fi
 
-    if [ "$have_adgh" = "1" ] && [ -x /etc/init.d/adguardhome ]; then
-        uci set adguardhome.config.enabled='1' 2>/dev/null
-        /etc/init.d/adguardhome enable 2>/dev/null
-        /etc/init.d/adguardhome start 2>/dev/null
-        logger -t firstboot-pkgs "AdGuardHome 已启用并启动"
-    fi
-
-    if [ -x /usr/bin/AdGuardHome ]; then
-        uci -q delete dhcp.@dnsmasq[0].port
-        uci -q delete dhcp.@dnsmasq[0].server
-        # OC(:7874) 仅实测监听前置(防装未起拖慢 dnsmasq；起停自愈合由 dns-balance 负责)
-        [ "$have_oc" = "1" ] && oc_listening \
-            && uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#7874'
-        add_dnsmasq_upstream
-        uci set dhcp.@dnsmasq[0].noresolv='1'
-        uci set dhcp.@dnsmasq[0].rebind_protection='0'
-        uci set dhcp.@dnsmasq[0].dns_redirect='0'
-        uci commit dhcp
-
-        # 劫持开关持久化(由 adguardhome 服务按生命周期布/清)
-        DNS_HIJACK=$(cat /etc/firstboot-pkgs/dns_hijack 2>/dev/null || echo 1)
-        uci set adguardhome.config.dns_hijack="$DNS_HIJACK"
-        # 双路由：填对端旁路由 IP 供 dns-hijack 排除防二次劫持
-        BYPASS_IP=$(cat /etc/firstboot-pkgs/bypass_ip 2>/dev/null)
-        [ -n "$BYPASS_IP" ] && uci set adguardhome.config.dns_hijack_bypass_ip="$BYPASS_IP"
-        uci commit adguardhome
-        if [ "$DNS_HIJACK" = "0" ]; then
-            BYPASS_IP=$(uci -q get adguardhome.config.dns_hijack_bypass_ip 2>/dev/null)
-            for _z in wan wan6; do
-                uci -q get firewall.$_z >/dev/null 2>&1 || continue
-                uci -q delete firewall.drop_lan_dns_$_z
-                uci set firewall.drop_lan_dns_$_z=rule
-                uci set firewall.drop_lan_dns_$_z.name="Reject LAN->$_z :53 (force router DNS)"
-                uci set firewall.drop_lan_dns_$_z.src='lan'
-                # 旁路按地址族：wan->IPv4、wan6->IPv6，避免错配致 nft 编译失败
-                case "$BYPASS_IP" in
-                    *:*) [ "$_z" = "wan6" ] && uci set firewall.drop_lan_dns_$_z.src_ip="!$BYPASS_IP" ;;
-                    *)  [ "$_z" = "wan" ] && uci set firewall.drop_lan_dns_$_z.src_ip="!$BYPASS_IP" ;;
-                esac
-                uci set firewall.drop_lan_dns_$_z.dest="$_z"
-                uci set firewall.drop_lan_dns_$_z.dest_port='53'
-                uci set firewall.drop_lan_dns_$_z.proto='udp tcp'
-                uci set firewall.drop_lan_dns_$_z.target='REJECT'
-            done
-            uci commit firewall
-            logger -t firstboot-pkgs "DNS 拓扑: dnsmasq :53 兜底 + ADGH :5353（REJECT 出向 :53，不劫持）"
-        else
-            logger -t firstboot-pkgs "DNS 拓扑: dnsmasq :53 兜底 + ADGH :5353（劫持由 adguardhome 服务按生命周期布设 :53->:5353）"
-        fi
-    elif [ "$have_oc" = "1" ]; then
-        uci -q delete dhcp.@dnsmasq[0].server
-        # OC(:7874) 仅实测监听前置(无 ADGH 时此处即最终链路，更须防死端口)
-        oc_listening && uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#7874'
-        add_dnsmasq_upstream
-        uci set dhcp.@dnsmasq[0].noresolv='1'
-        uci set dhcp.@dnsmasq[0].dns_redirect='0'
-        uci commit dhcp
-        logger -t firstboot-pkgs "DNS 拓扑: 仅 OpenClash -> dnsmasq :53 -> OC :7874（无 ADGH/dns-hijack）"
-    fi
+	# 劫持开关持久化(由 adguardhome 服务按生命周期布/清)；上游由 dns-balance 常驻自愈合
+	DNS_HIJACK=$(cat /etc/firstboot-pkgs/dns_hijack 2>/dev/null || echo 1)
+	uci set adguardhome.config.dns_hijack="$DNS_HIJACK"
+	# 双路由：填对端旁路由 IP 供 dns-hijack 排除防二次劫持
+	BYPASS_IP=$(cat /etc/firstboot-pkgs/bypass_ip 2>/dev/null)
+	[ -n "$BYPASS_IP" ] && uci set adguardhome.config.dns_hijack_bypass_ip="$BYPASS_IP"
+	uci commit adguardhome
+	if [ "$DNS_HIJACK" = "0" ]; then
+		BYPASS_IP=$(uci -q get adguardhome.config.dns_hijack_bypass_ip 2>/dev/null)
+		for _z in wan wan6; do
+			uci -q get firewall.$_z >/dev/null 2>&1 || continue
+			uci -q delete firewall.drop_lan_dns_$_z
+			uci set firewall.drop_lan_dns_$_z=rule
+			uci set firewall.drop_lan_dns_$_z.name="Reject LAN->$_z :53 (force router DNS)"
+			uci set firewall.drop_lan_dns_$_z.src='lan'
+			# 旁路按地址族：wan->IPv4、wan6->IPv6，避免错配致 nft 编译失败
+			case "$BYPASS_IP" in
+				*:*) [ "$_z" = "wan6" ] && uci set firewall.drop_lan_dns_$_z.src_ip="!$BYPASS_IP" ;;
+				*)  [ "$_z" = "wan" ] && uci set firewall.drop_lan_dns_$_z.src_ip="!$BYPASS_IP" ;;
+			esac
+			uci set firewall.drop_lan_dns_$_z.dest="$_z"
+			uci set firewall.drop_lan_dns_$_z.dest_port='53'
+			uci set firewall.drop_lan_dns_$_z.proto='udp tcp'
+			uci set firewall.drop_lan_dns_$_z.target='REJECT'
+		done
+		uci commit firewall
+		logger -t firstboot-pkgs "DNS 拓扑: dnsmasq :53 兜底 + ADGH :5353（REJECT 出向 :53，不劫持）"
+	else
+		logger -t firstboot-pkgs "DNS 拓扑: dnsmasq :53 兜底 + ADGH :5353（劫持由 dns-balance 常驻自愈合布/清）"
+	fi
 }
 
 wait_net() {
-    # 等公网可达
-    local i=0
-    while [ $i -lt 30 ]; do
-        if ping -c1 -W2 223.5.5.5 >/dev/null 2>&1; then
-            return 0
-        fi
-        # ICMP 可能被丢弃，补 HTTPS 探测
-        if wget -T 4 -q -O /dev/null https://connectivitycheck.gstatic.com/generate_204 2>/dev/null \
-           || wget -T 4 -q -O /dev/null https://www.qq.com/ 2>/dev/null; then
-            return 0
-        fi
-        i=$((i + 1))
-        sleep 4
-    done
-    return 1
+	# 等公网可达
+	local i=0
+	while [ $i -lt 30 ]; do
+		if ping -c1 -W2 223.5.5.5 >/dev/null 2>&1; then
+			return 0
+		fi
+		# ICMP 可能被丢弃，补 HTTPS 探测
+		if wget -T 4 -q -O /dev/null https://connectivitycheck.gstatic.com/generate_204 2>/dev/null \
+		   || wget -T 4 -q -O /dev/null https://www.qq.com/ 2>/dev/null; then
+			return 0
+		fi
+		i=$((i + 1))
+		sleep 4
+	done
+	return 1
 }
 
 start() {
-    # 原子锁防重复触发(rc.d 与 rc.local 并发)
-    LOCK=/tmp/.firstboot-pkgs.lock
-    (
-        if mkdir "$LOCK" 2>/dev/null; then
-            if install_offline; then
-                if wait_net; then
-                    install_online_and_dns
-                else
-                    logger -t firstboot-pkgs "等待网络超时，在线包下次启动重试"
-                fi
-            else
-                logger -t firstboot-pkgs "离线包存在失败，保留服务下次启动重试"
-            fi
-            rmdir "$LOCK" 2>/dev/null
-        fi
-    ) &
+	# 原子锁防重复触发(rc.d 与 rc.local 并发)
+	LOCK=/tmp/.firstboot-pkgs.lock
+	(
+		if mkdir "$LOCK" 2>/dev/null; then
+			if install_offline; then
+				if wait_net; then
+					install_online_and_dns
+				else
+					logger -t firstboot-pkgs "等待网络超时，在线包下次启动重试"
+				fi
+			else
+				logger -t firstboot-pkgs "离线包存在失败，保留服务下次启动重试"
+			fi
+			rmdir "$LOCK" 2>/dev/null
+		fi
+	) &
 }
 
 stop() { :; }

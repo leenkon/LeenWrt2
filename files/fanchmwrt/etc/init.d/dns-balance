@@ -1,7 +1,8 @@
 #!/bin/sh /etc/rc.common
 # 独立常驻 DNS 自愈合：与 ADGH/OC 生命周期解耦，每 5s 探 ADGH(:5353) 与 OC(:7874) 真实监听态，
 # 仅状态变化时分别重建劫持表(/usr/sbin/dns-hijack) 与重排 dnsmasq 上游(set_upstream)。
-# 覆盖 ADGH 装/卸/崩 与 OC 装/卸/启停 的全部组合；set_upstream 幂等，供本服务循环与 adguardhome 启停共用。
+# 覆盖 ADGH 装/卸/崩 与 OC 装/卸/启停 的全部组合；set_upstream 幂等，是 dnsmasq 上游唯一管理者
+# （diy.sh / firstboot-pkgs 不再写上游，仅 ADGH/OC 配置与劫持开关，避免双处写上游漂移）。
 USE_PROCD=1
 START=20
 STOP=80
@@ -35,6 +36,12 @@ set_upstream() {
 	for s in $_desired; do
 		[ -n "$s" ] && uci add_list dhcp.@dnsmasq[0].server="$s"
 	done
+	# 有 wan：绕 ISP 污染，peerdns 关、wan.dns 与 resolv.conf 回指 dnsmasq
+	if uci -q get network.wan >/dev/null 2>&1; then
+		uci set network.wan.peerdns='0'
+		uci set network.wan.dns='127.0.0.1'
+		printf 'nameserver 127.0.0.1\n' > /etc/resolv.conf 2>/dev/null || true
+	fi
 	uci commit dhcp
 	/etc/init.d/dnsmasq restart 2>/dev/null
 }
