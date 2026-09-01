@@ -86,7 +86,7 @@ apply_dns_chain() {
     [ -x /etc/init.d/dns-balance ] && /etc/init.d/dns-balance enable 2>/dev/null
 
     # 上游拓扑自适应：有 wan→公网 DNS + resolv.conf 回指 dnsmasq(绕 ISP 污染)；无 wan→经主路由网关
-    # OC(:7874) 前置仅实测监听时写入(防装未起死端口); 随 OC 起停的完整自愈合由 adguardhome init.d 的 setup_dnsmasq 监控循环负责
+    # OC(:7874) 前置仅实测监听时写入(防装未起死端口)；OC 起停自愈合由 dns-balance 负责
     add_dnsmasq_upstream() {
         if uci -q get network.wan >/dev/null 2>&1; then
             uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
@@ -124,7 +124,7 @@ apply_dns_chain() {
     if [ -x /usr/bin/AdGuardHome ]; then
         uci -q delete dhcp.@dnsmasq[0].port
         uci -q delete dhcp.@dnsmasq[0].server
-        # OC(:7874) 仅实测监听前置(防装未起拖慢 dnsmasq；自愈合由 adguardhome 监控循环负责)
+        # OC(:7874) 仅实测监听前置(防装未起拖慢 dnsmasq；起停自愈合由 dns-balance 负责)
         [ "$have_oc" = "1" ] && oc_listening \
             && uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#7874'
         add_dnsmasq_upstream

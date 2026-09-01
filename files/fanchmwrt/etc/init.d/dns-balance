@@ -13,7 +13,7 @@ start_service() {
 	procd_close_instance
 }
 
-# 停止即清劫持回退 dnsmasq(由 dns-upstream 处理上游)
+# 停止：dns-hijack 按 ADGH 监听态保留或自清劫持；dnsmasq 上游由 dns-upstream 归位
 stop_service() {
 	/usr/sbin/dns-hijack 2>/dev/null
 	/usr/sbin/dns-upstream 2>/dev/null
