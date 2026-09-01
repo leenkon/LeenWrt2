@@ -99,10 +99,9 @@ ruby)
 themes)
     # 须在 feeds update -a 之后运行：fanchmwrt 主题在克隆仓内(非独立 feed)，glob 定位；argon/bootstrap 在 feeds/luci。
     # 所有主题统一处理：
-    #  1) 标题改为 LuCI 合法 <% %> Lua 表达式（原 {{ }} 是 JS 模板语法，LuCI .ut 不解析 → 浏览器显示字面量 {{主机名}}）。
-    #  2) footer 不删除：删除会让 argon 的 menu-argon.js renderModeMenu() 往已消失的 #modemenu 节点 appendChild →
-    #     TypeError(null) → render() 抛错 → 整条侧边栏不渲染。改为在 <head> 注入 CSS 隐藏 footer：
-    #     DOM 仍在 → JS 不崩 → 导航栏保留；footer 信息视觉移除（所有主题统一，含装 OAF 时的 argon）。
+    #  1) 标题用 <% %> Lua（{{ }} 是 JS 模板语法，LuCI .ut 不解析 → 显示字面量 {{主机名}}）。
+    #  2) footer 只隐藏不删除：删了 argon menu-argon.js 的 renderModeMenu() 会 appendChild 到已消失的 #modemenu
+    #     → render() 抛错 → 整条侧边栏不渲染。保留 DOM 则 JS 不崩、导航保留（含装 OAF 时的 argon）。
     echo "[diy] themes: 处理 fanchmwrt/argon/bootstrap 主题标题与 footer"
     OPENWRT_DIR="$PROJECT_ROOT/openwrt"
     python3 - "$OPENWRT_DIR" <<'PY'
@@ -111,7 +110,7 @@ openwrt = sys.argv[1]
 
 # LuCI .ut 用 Lua 模板：boardinfo.hostname / node.title 均为模板上下文变量；striptags 为内置函数。
 TITLE_NEW = "<title><%= striptags((boardinfo.hostname or '?') .. (node and ' - ' .. node.title or '')) %> - LuCI</title>"
-# 隐藏 footer 但保留 DOM（#modemenu 仍在，menu-argon.js 不崩）；id 便于重复构建去重。
+# 隐藏 footer 但保留 DOM（#modemenu 仍在，menu-argon.js 不崩）；整串用于重复构建去重。
 HIDE_CSS = '<style id="leenwrt-hide-footer">footer{display:none!important}</style>'
 
 def fix_header(path):
@@ -136,7 +135,6 @@ for p in glob.glob(os.path.join(openwrt, '**', 'luci-theme-*'), recursive=True):
         theme_dirs.add(p)
 
 for d in sorted(theme_dirs):
-    name = os.path.basename(d)
     for h in glob.glob(os.path.join(d, '**', 'header.ut'), recursive=True):
         fix_header(h)
 PY
