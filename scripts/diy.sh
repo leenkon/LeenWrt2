@@ -99,7 +99,7 @@ ruby)
 themes)
     # 须在 feeds update -a 之后运行：fanchmwrt 主题在克隆仓内(非独立 feed)，glob 定位；argon/bootstrap 在 feeds/luci。
     # 所有主题统一处理：
-    #  1) 标题用 <% %> Lua（{{ }} 是 JS 模板语法，LuCI .ut 不解析 → 显示字面量 {{主机名}}）。
+    #  1) 标题按模板引擎选语法：Ucode 主题({% %}/{{ }})用 {{ }}，Lua 主题(<% %>)用 <%= %>（见 fix_header 内 is_ucode 检测）。
     #  2) footer 只隐藏不删除：删了 argon menu-argon.js 的 renderModeMenu() 会 appendChild 到已消失的 #modemenu
     #     → render() 抛错 → 整条侧边栏不渲染。保留 DOM 则 JS 不崩、导航保留（含装 OAF 时的 argon）。
     echo "[diy] themes: 处理 fanchmwrt/argon/bootstrap 主题标题与 footer"
@@ -108,15 +108,23 @@ themes)
 import sys, os, re, glob
 openwrt = sys.argv[1]
 
-# LuCI .ut 用 Lua 模板：boardinfo.hostname / node.title 均为模板上下文变量；striptags 为内置函数。
-TITLE_NEW = "<title><%= striptags((boardinfo.hostname or '?') .. (node and ' - ' .. node.title or '')) %> - LuCI</title>"
+# 标题按模板引擎选语法：Ucode 主题({% %} 控制流 / {{ }} 输出，如 fanchmwrt)用 {{ }}，Lua 主题(<% %>)用 <%= %>。
+# fwx/fanchmwrt 是 Ucode 模板，注入 Lua 的 <%= %> 会被原样输出(显示字面量 <%= striptags... %>)。
+# boardinfo.hostname / node.title / striptags 在两引擎模板上下文均可用。
+# 本仓库 fix_header 仅处理 .ut（ucode）模板；Lua 分支仅为遗留兼容保留，不会命中。
+TITLE_UCODE = "<title>{{ striptags((boardinfo.hostname or '?') .. (node and ' - ' .. node.title or '')) }} - LuCI</title>"
+TITLE_LUA  = "<title><%= striptags((boardinfo.hostname or '?') .. (node and ' - ' .. node.title or '')) %> - LuCI</title>"
 # 隐藏 footer 但保留 DOM（#modemenu 仍在，menu-argon.js 不崩）；整串用于重复构建去重。
 HIDE_CSS = '<style id="leenwrt-hide-footer">footer{display:none!important}</style>'
 
 def fix_header(path):
     s0 = open(path, encoding='utf-8').read()
     s = s0
-    # 标题：容忍 <title ...> 属性，替换为合法 Lua 表达式
+    # 按模板引擎选标题语法：.ut 即 ucode 模板（LuCI 25.12 全部主题为 ucode），强制用 {{ }}；
+    # 旧版注入的 Lua <%= %> 在此被识别为损坏并按 ucode 重新注入（自愈，重构建不残留字面量）。
+    is_ucode = path.endswith('.ut') or ('{%' in s) or (('{{' in s) and ('<%' not in s))
+    TITLE_NEW = TITLE_UCODE if is_ucode else TITLE_LUA
+    # 标题：容忍 <title ...> 属性，替换为对应引擎的合法表达式
     s, n = re.subn(r'<title[^>]*>.*?</title>', TITLE_NEW, s, count=1, flags=re.S)
     if n and HIDE_CSS not in s:
         # 紧跟 </title> 之后注入（位于 <head> 内），不依赖 </head> 是否存在
