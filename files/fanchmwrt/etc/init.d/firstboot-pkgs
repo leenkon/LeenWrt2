@@ -110,7 +110,8 @@ apply_dns_chain() {
 	if [ "$DNS_HIJACK" = "0" ]; then
 		BYPASS_IP=$(uci -q get adguardhome.config.dns_hijack_bypass_ip 2>/dev/null)
 		for _z in wan wan6; do
-			uci -q get firewall.$_z >/dev/null 2>&1 || continue
+			# zone 是匿名段，须按 name 反查；uci get firewall.$_z 只认具名段会静默跳过致规则永不生成
+			uci show firewall 2>/dev/null | grep -q "\.name='$_z'" || continue
 			uci -q delete firewall.drop_lan_dns_$_z
 			uci set firewall.drop_lan_dns_$_z=rule
 			uci set firewall.drop_lan_dns_$_z.name="Reject LAN->$_z :53 (force router DNS)"
