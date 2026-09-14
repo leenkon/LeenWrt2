@@ -3,10 +3,10 @@
 # 子命令:
 #   core [项目根目录] [--files-dir <目录>] [--arch <架构>]
 #       预装 Meta 核心二进制到 files/etc/openclash/core/，跳过设备首启在线下载。
-#       执行时机: diy.sh after 之后、files/ 复制到 openwrt 之前（仅 OC 勾选时由 build.sh 调用）。
+#       执行时机: diy.sh after 之后、files/ 复制到 openwrt 之前（仅 OC 勾选时由 workflow 调用）。
 #   luci [openwrt目录]
 #       用 vernesong/OpenClash 官方最新 master 替换 feeds 中的 luci-app-openclash。
-#       执行时机: feeds update -a 之后、feeds install -a 之前（仅 OC 勾选时由 build.sh 调用）。
+#       执行时机: feeds update -a 之后、feeds install -a 之前（仅 OC 勾选时由 workflow 调用）。
 
 set -e
 

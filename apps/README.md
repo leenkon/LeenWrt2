@@ -8,15 +8,13 @@
 ## 适用场景
 - **带 vermagic 的 kmod**（内核模块，如网卡驱动、kmod-tun 等）：
   官方 release 源的 kmod 与自编译内核的 vermagic 不一致，`insmod` 会拒绝加载，
-  因此必须随固件编译进镜像（由 `build.sh` / workflow 在 `.config` 追加 `CONFIG_PACKAGE_kmod-*` 段 + `make defconfig` 生成）或作为同源编译的 `.apk` 离线装。
+  因此必须随固件编译进镜像（由 workflow 在 `.config` 追加 `CONFIG_PACKAGE_kmod-*` 段 + `make defconfig` 生成）或作为同源编译的 `.apk` 离线装。
 - **闭源 / 自编译 / 非官方源的 userspace 包**（如 OpenClash、AdGuardHome 包装成的 `.apk`、
   你自己的 Lua 应用等），官方 apk 源取不到的，放这里离线装。
 
 ## 放置规则
-- 直接把 `.apk` 丢进本目录即可，构建脚本会自动拷到镜像的
-  `/etc/firstboot-pkgs/apps/` 并在首启安装。
-- `*.apk` **纳入版本库**（不再被 `.gitignore` 忽略），随固件打包进 `/etc/firstboot-pkgs/apps/` 首启安装；kmod 类须与自编译内核 vermagic 一致。
-  这些包可以是本地编译产物，也可以是手动上传 / 下载的预编译包，只要来源可信即可。
+- 直接把 `.apk` 丢进本目录即可，构建脚本自动拷到镜像的 `/etc/firstboot-pkgs/apps/` 并在首启安装。
+- `*.apk` 纳入版本库（不再被 `.gitignore` 忽略），随固件打包；kmod 类须与自编译内核 vermagic 一致，且来源可信。
 - 纯官方源就能取到的 userspace 包，请随固件编译进镜像（在对应 `.config` 追加 `CONFIG_PACKAGE_*`）或离线 `.apk` 放入本目录，不要放这里。
 
 ## 注意
