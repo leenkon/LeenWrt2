@@ -17,6 +17,38 @@ is_valid_ipv4() {
     return 0
 }
 
+# 源码补丁：上下文不符即 fail-fast；fuzz 命中同样拒绝（锚点漂移静默命中不可信）。
+# 返回 2 = 补丁 apply 不上且非 fuzz（soft=1 时由调用方判断是否上游已自带修复而让位）。
+_apply_fwx_src_patch() {
+    local name="$1" patch="$2" target="$3" soft="${4:-0}"
+    local log="/tmp/.diy_patch_$$.log"
+    [ -f "$patch" ] || error_exit "未找到 $name 补丁: $patch"
+    [ -d "$target" ] || error_exit "未找到 $name 目标目录: $target（源码未就绪？）"
+    if patch -p1 --reverse --dry-run -d "$target" < "$patch" >/dev/null 2>&1; then
+        echo "[diy] $name 已应用，跳过"
+    elif patch -p1 --dry-run -d "$target" < "$patch" >"$log" 2>&1 && ! grep -qi fuzz "$log"; then
+        patch -p1 -d "$target" < "$patch"
+        echo "[diy] applied $name -> $target"
+    elif grep -qi fuzz "$log" 2>/dev/null; then
+        cat "$log" >&2 2>/dev/null || true
+        error_exit "$name 补丁 fuzz 命中（上下文漂移，锚点不可信），拒绝应用（详见 $patch）"
+    elif [ "$soft" = "1" ]; then
+        return 2
+    else
+        cat "$log" >&2 2>/dev/null || true
+        error_exit "$name 补丁上下文不符，未应用（详见 $patch）；版本漂移需重新核对"
+    fi
+}
+
+# DPI 补丁自检闸门：skb_tail_pointer 须真实落入源码；Makefile 无 PKG_RELEASE，touch 防复用旧 .o 静默产出未打补丁 .ko
+_gate_dpi_patch() {
+    local tag="$1" src="$2" mk="$3"
+    [ -f "$src" ] || error_exit "$tag 源码缺失: $src"
+    grep -q skb_tail_pointer "$src" || error_exit "$tag DPI 补丁未生效：$src 缺 skb_tail_pointer 钳制 → 行为管理将内核 panic"
+    touch "$mk" 2>/dev/null || true
+    echo "[diy] $tag 补丁自检通过，已 touch Makefile 强制重编"
+}
+
 DEF_MAIN_IP="10.10.10.1"
 DEF_BYPASS_IP="10.10.10.2"
 SUBNET_MASK="255.255.255.0"
@@ -143,37 +175,26 @@ for d in sorted(theme_dirs):
         fix_header(h)
 PY
 
-    # fwxd：修复 dashboard 联网状态误报（DNS 劫持/ADGH 未就绪时 www.baidu.com 解析失败）
-    # LeenWrt2 的 fwxd 源码在主仓 clone（package/fcm/fwxd），非 feeds/fwx（immortalwrt 才用 src-link）
+    # fwxd：修复 dashboard 联网状态误报（DNS 劫持/ADGH 未就绪时误报离线）。硬失败：上下文漂移/fuzz 即报错，不放行静默构建。
     FWXD_DIR="$OPENWRT_DIR/package/fcm/fwxd"
-    FWXD_CHECK="$FWXD_DIR/src/check_main.c"
     FWXD_PATCH="$PROJECT_ROOT/patches/fwx/fwxd-internet-check-dns-agnostic.patch"
     [ -d "$FWXD_DIR" ] || error_exit "未找到 fwxd 源码目录: $FWXD_DIR（主仓 clone 路径是否变化？）"
-    if patch -p1 --dry-run -d "$FWXD_DIR" < "$FWXD_PATCH" >/dev/null 2>&1; then
-        patch -p1 -d "$FWXD_DIR" < "$FWXD_PATCH"
-        echo "[diy] 已应用 fwxd 联网检查补丁 -> $FWXD_CHECK"
-    else
-        error_exit "fwxd 联网检查补丁上下文不符，未应用（详见 $FWXD_PATCH）"
-    fi
+    _apply_fwx_src_patch "fwxd 联网检查" "$FWXD_PATCH" "$FWXD_DIR"
 
-    # fwx 内核模块：DPI 边界钳制（read_skb 的 kmalloc(len) 须 clamp 到 skb 尾部，
-    # 否则发送方伪造 tot_len/udph->len/doff 越界，触发 FORTIFY memcpy BUG / 原子分配失败→panic/重启。
-    # 与 LeenWrt 共用同一补丁；fanchmwrt 内核已导出 4 参 nf_send_reset，故无需 kmod-nf_send_reset 补丁。
-    # LeenWrt2 走分支头（fanchmwrt-${VERSION}，不可钉 SHA）→ 采用 fail-soft：
-    # 补丁能 apply 则应用；apply 不上则视为上游已自带钳制而跳过（warn），避免上游合入修复后误 abort 构建；
-    # 仅当"补丁 apply 不上且上游仍未钳制"才 error_exit（代码漂移需重新核对）。
+    # fwx 内核模块：DPI 边界钳制（伪造 tot_len/udph->len/doff 越界 → read_skb kmalloc 越界 → panic）。
+    # fanchmwrt 走分支头不可钉 SHA → fail-soft：clean apply 则应用并自检；apply 不上且非 fuzz 视为上游已自带钳制而让位；fuzz 命中拒绝。
     FWX_DIR="$OPENWRT_DIR/package/fcm/fwx"
     FWX_SRC="$FWX_DIR/src/fwx_main.c"
     FWX_PATCH="$PROJECT_ROOT/patches/fwx/fwx-match-feature-crash.patch"
     [ -d "$FWX_DIR" ] || error_exit "未找到 fwx 内核模块源码目录: $FWX_DIR（主仓 clone 路径是否变化？）"
-    if patch -p1 --dry-run -d "$FWX_DIR" < "$FWX_PATCH" >/dev/null 2>&1; then
-        patch -p1 -d "$FWX_DIR" < "$FWX_PATCH"
-        echo "[diy] 已应用 fwx DPI 边界钳制补丁 -> $FWX_SRC"
-    elif grep -Eq 'skb_tail_pointer|tail - ipp|pskb_may_pull' "$FWX_SRC" 2>/dev/null; then
-        # 上游已自带 skb 边界钳制（已修复此 bug），补丁上下文不符属正常，跳过以免 abort 构建
-        echo "[diy][warn] 上游 fwx_main.c 已自带 skb 边界钳制，DPI 补丁跳过（上游已修复，自动让位）"
+    if ! _apply_fwx_src_patch "fwx DPI 边界钳制" "$FWX_PATCH" "$FWX_DIR" 1; then
+        if grep -Eq 'skb_tail_pointer|tail - ipp|pskb_may_pull' "$FWX_SRC" 2>/dev/null; then
+            echo "[diy][warn] 上游 fwx_main.c 已自带 skb 边界钳制，DPI 补丁跳过（上游已修复，自动让位）"
+        else
+            error_exit "fwx DPI 边界钳制补丁上下文不符且上游未自带钳制（详见 $FWX_PATCH）；fwx 版本漂移需重新核对"
+        fi
     else
-        error_exit "fwx DPI 边界钳制补丁上下文不符且上游未自带钳制（详见 $FWX_PATCH）；fwx 版本漂移需重新核对"
+        _gate_dpi_patch "fwx DPI" "$FWX_SRC" "$FWX_DIR/Makefile"
     fi
     ;;
 
@@ -378,6 +399,18 @@ EOT
         crypt=$(printf '%s' "$ROOT_PASSWORD" | openssl passwd -1 -stdin) || error_exit "openssl密码加密失败"
         echo "root:$crypt:0:0:99999:7:::" > "$SHADOW"
         chmod 600 "$SHADOW" 2>/dev/null || true
+    fi
+
+    # fwxd 首启特征库在线更新：one-shot init.d(START=99)，成功后自清零残留；fwxd 随核心打包，始终注入
+    FWXD_UPDATER="$SCRIPT_DIR/fwxd-feature-autoupdate"
+    if [ -f "$FWXD_UPDATER" ]; then
+        mkdir -p "$FB_DIR/etc/init.d" "$FB_DIR/etc/rc.d"
+        cp -f "$FWXD_UPDATER" "$FB_DIR/etc/init.d/fwxd-feature-autoupdate"
+        chmod 755 "$FB_DIR/etc/init.d/fwxd-feature-autoupdate"
+        ln -sf ../init.d/fwxd-feature-autoupdate "$FB_DIR/etc/rc.d/S99fwxd-feature-autoupdate"
+        echo "[diy] 已装入 fwxd 特征库首启更新: /etc/init.d/fwxd-feature-autoupdate (START=99)"
+    else
+        echo "[diy] WARN: 未找到 $FWXD_UPDATER" >&2
     fi
     ;;
 *) error_exit "PHASE仅支持 before / after / ruby / themes" ;;

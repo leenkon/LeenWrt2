@@ -1,0 +1,64 @@
+#!/bin/sh /etc/rc.common
+# LeenWrt2 fwxd 首启特征库更新：one-shot init.d(START=99)，成功后 disable+自删零残留（出厂配置由 uci-defaults 负责）。
+# fwxd 随 fanchmwrt 核心打包，在线更新客户端经 ubus `fwx common` 暴露（与 OAF 共用 fwx 命名空间），本脚本仅调用该接口拉取最新应用特征库。
+START=99
+STOP=10
+
+self_clear() {
+    /etc/init.d/fwxd-feature-autoupdate disable 2>/dev/null
+    rm -f /etc/init.d/fwxd-feature-autoupdate
+}
+
+update() {
+    # 等网络就绪（最多 ~60s）
+    for i in $(seq 1 30); do
+        ping -c1 -W2 223.5.5.5 >/dev/null 2>&1 && break
+        sleep 2
+    done
+    # fwx ubus 服务须存在（fwxd 已启动）；缺失则本机未装 fwxd，自清避免残留
+    ubus list fwx >/dev/null 2>&1 || { self_clear; return 0; }
+
+    # 取列表：仅服务器返回 code=2000 才继续
+    list=$(ubus call fwx common '{"api":"get_feature_online_list","data":{"refresh":1,"lang":"cn"}}' 2>/dev/null)
+    [ "$(echo "$list" | jsonfilter -e '@.code' 2>/dev/null)" = "2000" ] || return 1
+    # 遍历 files，挑 free=1 中 count 最大者（仅下标访问，兼容所有 jsonfilter）
+    best=""; best_cnt=-1; i=0
+    while :; do
+        id=$(echo "$list" | jsonfilter -e "@.data.files[$i].id" 2>/dev/null)
+        [ -z "$id" ] && break
+        free=$(echo "$list" | jsonfilter -e "@.data.files[$i].free" 2>/dev/null)
+        cnt=$(echo "$list" | jsonfilter -e "@.data.files[$i].count" 2>/dev/null)
+        [ "$free" = "1" ] && { cnt=${cnt:-0}; [ "$cnt" -gt "$best_cnt" ] && { best="$id"; best_cnt="$cnt"; }; }
+        i=$((i+1))
+    done
+    [ -n "$best" ] || return 1
+
+    # 触发更新：返回 code=2000 即已接受（fwxd 异步下载）；非 2000 则按当前状态继续，避免重复触发
+    resp=$(ubus call fwx common "{\"api\":\"start_feature_online_update\",\"data\":{\"id\":\"$best\",\"lang\":\"cn\"}}" 2>/dev/null)
+    if [ "$(echo "$resp" | jsonfilter -e '@.code' 2>/dev/null)" != "2000" ]; then
+        st=$(ubus call fwx common '{"api":"get_feature_online_update_status"}' 2>/dev/null)
+        case "$(echo "$st" | jsonfilter -e '@.data.state' 2>/dev/null)" in
+            success) self_clear; return 0 ;;
+            running) : ;;
+            *) return 1 ;;
+        esac
+    fi
+
+    # 轮询直到成功/失败（最多 ~10min）；成功才自清，失败保留下次启动重试
+    for i in $(seq 1 60); do
+        case "$(ubus call fwx common '{"api":"get_feature_online_update_status"}' 2>/dev/null | jsonfilter -e '@.data.state' 2>/dev/null)" in
+            success) break ;;
+            failed)  return 1 ;;
+        esac
+        sleep 10
+    done
+
+    self_clear
+    return 0
+}
+
+start() {
+    # 后台运行不阻塞启动；整体重试 3 次应对 fwxd 尚未就绪
+    ( for n in 1 2 3; do update && break; sleep 15; done ) &
+}
+stop() { :; }

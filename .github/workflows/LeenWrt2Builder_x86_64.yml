@@ -120,15 +120,7 @@ jobs:
           [ "${{ github.event.inputs.openclash }}" = "true" ] && _inject_pkg_list "$GITHUB_WORKSPACE/configs/oc-packages.list" "OpenClash 选装包"
           [ "${{ github.event.inputs.adguardhome }}" = "true" ] && _inject_pkg_list "$GITHUB_WORKSPACE/configs/adgh-packages.list" "AdGuardHome 选装包"
           echo "[build] FanchmWrt: 已写入最小 .config + ADGH/OC 选装包，make defconfig 将展开"
-
-          # 用定制 feature.cfg 覆盖 fwxd 应用特征库
-          FWXD_CFG="package/fcm/fwxd/files/feature.cfg"
-          if [ -f "$GITHUB_WORKSPACE/appfilter-assets/feature.cfg" ] && [ -f "$FWXD_CFG" ]; then
-            cp -f "$GITHUB_WORKSPACE/appfilter-assets/feature.cfg" "$FWXD_CFG"
-            echo "[build] FanchmWrt: 已覆盖 fwxd 应用特征库 (-> /etc/fwxd/feature.cfg)"
-          elif [ -f "$GITHUB_WORKSPACE/appfilter-assets/feature.cfg" ]; then
-            echo "[build] 警告: 未找到 fwxd feature.cfg，跳过覆盖"
-          fi
+          # 注：fwxd 特征库不再构建期覆盖，改为首启在线更新（scripts/fwxd-feature-autoupdate 经 ubus `fwx common` 拉取）
 
           ROOTPWD="${{ github.event.inputs.root_password }}"; ROOTPWD="${ROOTPWD:-password}"
           CIP="${{ github.event.inputs.custom_ip }}"; CGW="${{ github.event.inputs.custom_gateway }}"
