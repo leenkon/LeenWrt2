@@ -152,7 +152,6 @@ jobs:
               rm -f files/usr/bin/AdGuardHome
               rm -f files/etc/init.d/adguardhome
               rm -f files/etc/config/adguardhome
-              rm -f files/etc/hotplug.d/iface/99-adgh-filters
             fi
             if [ "${{ github.event.inputs.adguardhome }}" = "false" ] || [ "${{ github.event.inputs.dns_hijack }}" = "false" ]; then
               rm -f files/usr/sbin/dns-hijack

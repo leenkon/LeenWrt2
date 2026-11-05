@@ -131,7 +131,7 @@ ruby)
 themes)
     # 须在 feeds update -a 后运行（fanchmwrt 在克隆仓，argon/bootstrap 在 feeds/luci）
     # 所有主题统一处理：
-    #  1) 标题：.ut 即 ucode，用 {{ }}（旧 Lua <%= %> 属损坏，重构建自愈）。
+    #  1) 标题：.ut 即 ucode，一律用 {{ }}（Lua <%= %> 会被字面输出）。
     #  2) footer：隐藏不删除，保 #modemenu DOM 防 menu-argon.js 抛错致侧边栏不渲染。
     echo "[diy] themes: 处理 fanchmwrt/argon/bootstrap 主题标题与 footer"
     OPENWRT_DIR="$PROJECT_ROOT/openwrt"
@@ -139,24 +139,19 @@ themes)
 import sys, os, re, glob
 openwrt = sys.argv[1]
 
-# .ut 即 ucode 模板；Lua <%= %> 分支仅遗留兼容。
+# .ut 是 ucode 模板，标题一律 {{ }}；Lua <%= %> 会被字面输出，勿用。
 # boardinfo.hostname / node.title / striptags 为模板上下文变量。
-TITLE_UCODE = "<title>{{ striptags((boardinfo.hostname or '?') .. (node and ' - ' .. node.title or '')) }} - LuCI</title>"
-TITLE_LUA  = "<title><%= striptags((boardinfo.hostname or '?') .. (node and ' - ' .. node.title or '')) %> - LuCI</title>"
-# 隐藏 footer 但保留 DOM，整串用于重复构建去重。
+TITLE = "<title>{{ striptags((boardinfo.hostname or '?') .. (node and ' - ' .. node.title or '')) }} - LuCI</title>"
+# 隐藏 footer 但保留 DOM（整串用于重复构建去重）
 HIDE_CSS = '<style id="leenwrt-hide-footer">footer{display:none!important}</style>'
 
 def fix_header(path):
     s0 = open(path, encoding='utf-8').read()
     s = s0
-    # .ut 即 ucode（LuCI 约定）；旧 Lua <%= %> 按损坏自愈重注入。
-    is_ucode = path.endswith('.ut')
-    TITLE_NEW = TITLE_UCODE if is_ucode else TITLE_LUA
     # 替换 <title>，容忍 <title ...> 属性
-    s, n = re.subn(r'<title[^>]*>.*?</title>', TITLE_NEW, s, count=1, flags=re.S)
+    s, n = re.subn(r'<title[^>]*>.*?</title>', TITLE, s, count=1, flags=re.S)
     if n and HIDE_CSS not in s:
-        # 紧跟 </title> 注入，不依赖 </head> 是否存在
-        s = s.replace(TITLE_NEW, TITLE_NEW + "\n    " + HIDE_CSS, 1)
+        s = s.replace(TITLE, TITLE + "\n    " + HIDE_CSS, 1)  # 紧跟 </title> 注入，不依赖 </head>
     if s != s0:
         open(path, 'w', encoding='utf-8').write(s)
         print("[diy] 标题+footer隐藏已应用: " + path)
