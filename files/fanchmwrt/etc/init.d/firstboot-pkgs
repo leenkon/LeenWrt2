@@ -100,13 +100,15 @@ apply_dns_chain() {
 		logger -t firstboot-pkgs "AdGuardHome 已启用并启动"
 	fi
 
-	# 劫持开关持久化(由 adguardhome 服务按生命周期布/清)；上游由 dns-balance 常驻自愈合
+	# 劫持开关写 UCI（dns-hijack 读取，=0 清表回退）；上游由 dns-balance 常驻自愈合
 	DNS_HIJACK=$(cat /etc/firstboot-pkgs/dns_hijack 2>/dev/null || echo 1)
 	uci set adguardhome.config.dns_hijack="$DNS_HIJACK"
 	# 双路由：填对端旁路由 IP 供 dns-hijack 排除防二次劫持
 	BYPASS_IP=$(cat /etc/firstboot-pkgs/bypass_ip 2>/dev/null)
 	[ -n "$BYPASS_IP" ] && uci set adguardhome.config.dns_hijack_bypass_ip="$BYPASS_IP"
 	uci commit adguardhome
+	# 开关写在 ADGH start 之后：立即 reconcile，勿等 60s 看门狗（关劫持即时清表）
+	[ -x /usr/sbin/dns-hijack ] && /usr/sbin/dns-hijack
 	if [ "$DNS_HIJACK" = "0" ]; then
 		BYPASS_IP=$(uci -q get adguardhome.config.dns_hijack_bypass_ip 2>/dev/null)
 		for _z in wan wan6; do
@@ -117,16 +119,21 @@ apply_dns_chain() {
 			uci set firewall.drop_lan_dns_$_z.name="Reject LAN->$_z :53 (force router DNS)"
 			uci set firewall.drop_lan_dns_$_z.src='lan'
 			# 旁路按地址族：wan->IPv4、wan6->IPv6，避免错配致 nft 编译失败
-			case "$BYPASS_IP" in
-				*:*) [ "$_z" = "wan6" ] && uci set firewall.drop_lan_dns_$_z.src_ip="!$BYPASS_IP" ;;
-				*)  [ "$_z" = "wan" ] && uci set firewall.drop_lan_dns_$_z.src_ip="!$BYPASS_IP" ;;
-			esac
+			# 旁路为空勿写 '!'：空取反会让 fw4 生成非法 nft 表达式（与 LeenWrt REJECT_BLK 一致）
+			if [ -n "$BYPASS_IP" ]; then
+				case "$BYPASS_IP" in
+					*:*) [ "$_z" = "wan6" ] && uci set firewall.drop_lan_dns_$_z.src_ip="!$BYPASS_IP" ;;
+					*)   [ "$_z" = "wan" ] && uci set firewall.drop_lan_dns_$_z.src_ip="!$BYPASS_IP" ;;
+				esac
+			fi
 			uci set firewall.drop_lan_dns_$_z.dest="$_z"
 			uci set firewall.drop_lan_dns_$_z.dest_port='53'
 			uci set firewall.drop_lan_dns_$_z.proto='udp tcp'
 			uci set firewall.drop_lan_dns_$_z.target='REJECT'
 		done
 		uci commit firewall
+		# 运行期写 firewall 须 reload 才生效（uci-defaults 期无需：fw4 尚未启动）
+		[ -x /etc/init.d/firewall ] && /etc/init.d/firewall reload 2>/dev/null
 		logger -t firstboot-pkgs "DNS 拓扑: dnsmasq :53 兜底 + ADGH :5353（REJECT 出向 :53，不劫持）"
 	else
 		logger -t firstboot-pkgs "DNS 拓扑: dnsmasq :53 兜底 + ADGH :5353（劫持由 dns-balance 常驻自愈合布/清）"

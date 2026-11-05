@@ -143,22 +143,19 @@ jobs:
           # 共享静态文件层（如 cpufreq-perf）覆盖到核专属 files 之上
           [[ -d "$GITHUB_WORKSPACE/files/common" ]] && { cp -rf "$GITHUB_WORKSPACE/files/common/." files/; } || true
 
-          # 文件清理：按勾选删除不需要的静态文件（在 openwrt/files 副本上操作）
-          if [ "${{ github.event.inputs.profile }}" = "Mini" ]; then
-            :  # 新拓扑：旁路由保留 dns-hijack（与主路由同走重定向）
-          elif [ "${{ github.event.inputs.profile }}" = "Main" ]; then
-            if [ "${{ github.event.inputs.adguardhome }}" = "false" ]; then
-              rm -rf files/etc/adguardhome
-              rm -f files/usr/bin/AdGuardHome
-              rm -f files/etc/init.d/adguardhome
-              rm -f files/etc/config/adguardhome
-            fi
-            if [ "${{ github.event.inputs.adguardhome }}" = "false" ] || [ "${{ github.event.inputs.dns_hijack }}" = "false" ]; then
-              rm -f files/usr/sbin/dns-hijack
-            fi
-            if [ "${{ github.event.inputs.openclash }}" = "false" ]; then
-              rm -rf files/etc/openclash
-            fi
+          # 文件清理：按勾选删除不需要的静态文件（Main/Mini 一致，在 openwrt/files 副本上操作）
+          if [ "${{ github.event.inputs.adguardhome }}" = "false" ]; then
+            rm -rf files/etc/adguardhome
+            rm -f files/usr/bin/AdGuardHome
+            rm -f files/etc/init.d/adguardhome
+            rm -f files/etc/config/adguardhome
+          fi
+          # 关劫持时删脚本是构建期兜底；运行期唯一来源为 adguardhome.config.dns_hijack（dns-hijack 读取）
+          if [ "${{ github.event.inputs.adguardhome }}" = "false" ] || [ "${{ github.event.inputs.dns_hijack }}" = "false" ]; then
+            rm -f files/usr/sbin/dns-hijack
+          fi
+          if [ "${{ github.event.inputs.openclash }}" = "false" ]; then
+            rm -rf files/etc/openclash
           fi
 
           # 离线 .apk + 在线 lists：拷入首启安装目录
@@ -168,7 +165,7 @@ jobs:
           # common/default 始终拷（在线装其余包）；ADGH/OC 已编译进固件，不再经 lists 安装
           cp -f $GITHUB_WORKSPACE/lists/common.txt files/etc/firstboot-pkgs/lists/ 2>/dev/null || true
           cp -f $GITHUB_WORKSPACE/lists/default.txt files/etc/firstboot-pkgs/lists/ 2>/dev/null || true
-          # DNS 劫持：1=重定向 :53，0=REJECT 出向（firstboot-pkgs 读取）
+          # DNS 劫持：1/0 写首启标记，firstboot-pkgs 转写 UCI；dns-hijack 据此布表或清表
           if [ "${{ github.event.inputs.dns_hijack }}" = "true" ]; then
             echo "1" > files/etc/firstboot-pkgs/dns_hijack 2>/dev/null || true
           else
